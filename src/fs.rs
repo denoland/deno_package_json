@@ -7,12 +7,7 @@ pub trait DenoPkgJsonFs {
   fn read_to_string_lossy(
     &self,
     path: &Path,
-  ) -> Result<String, std::io::Error> {
-    // allowed here for the real fs
-    #[allow(clippy::disallowed_methods)]
-    let bytes = std::fs::read(path)?;
-    Ok(string_from_utf8_lossy(bytes))
-  }
+  ) -> Result<String, std::io::Error>;
 }
 
 impl<'a> Default for &'a dyn DenoPkgJsonFs {
