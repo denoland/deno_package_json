@@ -417,10 +417,10 @@ fn file_path_to_url_wasm(path: &Path) -> Url {
   let original_path = path.to_string_lossy();
   let mut path_str = original_path;
   // assume paths containing backslashes are windows paths
-  if path_str.contains("\\") {
+  if path_str.contains('\\') {
     let mut url = Url::parse("file://").unwrap();
     if let Some(next) = path_str.strip_prefix(r#"\\?\UNC\"#) {
-      if let Some((host, rest)) = next.split_once("\\") {
+      if let Some((host, rest)) = next.split_once('\\') {
         if url.set_host(Some(host)).is_ok() {
           path_str = rest.to_string().into();
         }
@@ -428,14 +428,14 @@ fn file_path_to_url_wasm(path: &Path) -> Url {
     } else if let Some(next) = path_str.strip_prefix(r#"\\?\"#) {
       path_str = next.to_string().into();
     } else if let Some(next) = path_str.strip_prefix(r#"\\"#) {
-      if let Some((host, rest)) = next.split_once("\\") {
+      if let Some((host, rest)) = next.split_once('\\') {
         if url.set_host(Some(host)).is_ok() {
           path_str = rest.to_string().into();
         }
       }
     }
 
-    for component in path_str.split("\\") {
+    for component in path_str.split('\\') {
       url.path_segments_mut().unwrap().push(component);
     }
 
