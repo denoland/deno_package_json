@@ -414,68 +414,53 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
 fn file_path_to_url_wasm(path: &Path) -> Url {
   use std::path::Component;
 
-  let mut url = Url::parse("file://").unwrap();
-  let mut had_windows_prefix = false;
-  for component in path.components() {
-    match component {
-      Component::Prefix(prefix) => {
-        match prefix.kind() {
-          std::path::Prefix::VerbatimDisk(_) => {
-            url
-              .path_segments_mut()
-              .unwrap()
-              .push(&prefix.as_os_str().to_string_lossy());
-          }
-          std::path::Prefix::DeviceNS(_) => {
-            unreachable!(); // assume nobody will ever put a package.json on a device name
-          }
-          std::path::Prefix::Verbatim(component) => {
-            url
-              .path_segments_mut()
-              .unwrap()
-              .push(&component.to_string_lossy());
-          }
-          std::path::Prefix::VerbatimUNC(left, right)
-          | std::path::Prefix::UNC(left, right) => {
-            url
-              .path_segments_mut()
-              .unwrap()
-              .push(&left.to_string_lossy())
-              .push(&right.to_string_lossy());
-            // convert file:/// to file://
-            url = Url::parse(&format!(
-              "file://{}",
-              url.as_str().strip_prefix("file:///").unwrap()
-            ))
-            .unwrap();
-          }
-          std::path::Prefix::Disk(_) => {
-            url
-              .path_segments_mut()
-              .unwrap()
-              .push(&prefix.as_os_str().to_string_lossy());
-          }
-        }
-        had_windows_prefix = true;
-      }
-      Component::RootDir => {
-        if !had_windows_prefix {
-          url.path_segments_mut().unwrap().push("");
+  let original_path = path.to_string_lossy();
+  let mut path_str = original_path;
+  // assume paths containing backslashes are windows paths
+  if path_str.contains("\\") {
+    let mut url = Url::parse("file://").unwrap();
+    if let Some(next) = path_str.strip_prefix(r#"\\?\UNC\"#) {
+      if let Some((host, rest)) = next.split_once("\\") {
+        if url.set_host(Some(host)).is_ok() {
+          path_str = rest.to_string().into();
         }
       }
-      Component::Normal(segment) => {
-        url
-          .path_segments_mut()
-          .unwrap()
-          .push(&segment.to_string_lossy());
-      }
-      Component::CurDir | Component::ParentDir => {
-        unreachable!()
+    } else if let Some(next) = path_str.strip_prefix(r#"\\?\"#) {
+      path_str = next.to_string().into();
+    } else if let Some(next) = path_str.strip_prefix(r#"\\"#) {
+      if let Some((host, rest)) = next.split_once("\\") {
+        if url.set_host(Some(host)).is_ok() {
+          path_str = rest.to_string().into();
+        }
       }
     }
-  }
 
-  url
+    for component in path_str.split("\\") {
+      url.path_segments_mut().unwrap().push(component);
+    }
+
+    url
+  } else {
+    let mut url = Url::parse("file://").unwrap();
+    for component in path.components() {
+      match component {
+        Component::RootDir => {
+          url.path_segments_mut().unwrap().push("");
+        }
+        Component::Normal(segment) => {
+          url
+            .path_segments_mut()
+            .unwrap()
+            .push(&segment.to_string_lossy());
+        }
+        Component::Prefix(_) | Component::CurDir | Component::ParentDir => {
+          unreachable!() // assume normalized
+        }
+      }
+    }
+
+    url
+  }
 }
 
 #[cfg(test)]
