@@ -6,11 +6,23 @@ version = 3
 name = "deno_package_json"
 version = "0.1.2"
 dependencies = [
+ "deno_path_util",
  "deno_semver",
  "indexmap",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "thiserror",
+ "url",
+]
+
+[[package]]
+name = "deno_path_util"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f9d132dd0e82bb033580b7fe9fcb72b6cc75512116061ced18ad88fb54b38f1"
+dependencies = [
+ "percent-encoding",
  "thiserror",
  "url",
 ]
