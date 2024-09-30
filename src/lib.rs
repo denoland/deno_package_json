@@ -279,14 +279,8 @@ impl PackageJson {
     }
   }
 
-  #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
   pub fn specifier(&self) -> Url {
-    Url::from_file_path(&self.path).unwrap()
-  }
-
-  #[cfg(not(any(unix, windows, target_os = "redox", target_os = "wasi")))]
-  pub fn specifier(&self) -> Url {
-    file_path_to_url_wasm(&self.path)
+    deno_path_util::url_from_file_path(&self.path).unwrap()
   }
 
   pub fn dir_path(&self) -> &Path {
@@ -405,62 +399,6 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
   }
 
   is_conditional_sugar
-}
-
-#[cfg(any(
-  test,
-  not(any(unix, windows, target_os = "redox", target_os = "wasi"))
-))]
-fn file_path_to_url_wasm(path: &Path) -> Url {
-  use std::path::Component;
-
-  let original_path = path.to_string_lossy();
-  let mut path_str = original_path;
-  // assume paths containing backslashes are windows paths
-  if path_str.contains('\\') {
-    let mut url = Url::parse("file://").unwrap();
-    if let Some(next) = path_str.strip_prefix(r#"\\?\UNC\"#) {
-      if let Some((host, rest)) = next.split_once('\\') {
-        if url.set_host(Some(host)).is_ok() {
-          path_str = rest.to_string().into();
-        }
-      }
-    } else if let Some(next) = path_str.strip_prefix(r#"\\?\"#) {
-      path_str = next.to_string().into();
-    } else if let Some(next) = path_str.strip_prefix(r#"\\"#) {
-      if let Some((host, rest)) = next.split_once('\\') {
-        if url.set_host(Some(host)).is_ok() {
-          path_str = rest.to_string().into();
-        }
-      }
-    }
-
-    for component in path_str.split('\\') {
-      url.path_segments_mut().unwrap().push(component);
-    }
-
-    url
-  } else {
-    let mut url = Url::parse("file://").unwrap();
-    for component in path.components() {
-      match component {
-        Component::RootDir => {
-          url.path_segments_mut().unwrap().push("");
-        }
-        Component::Normal(segment) => {
-          url
-            .path_segments_mut()
-            .unwrap()
-            .push(&segment.to_string_lossy());
-        }
-        Component::Prefix(_) | Component::CurDir | Component::ParentDir => {
-          unreachable!() // assume normalized
-        }
-      }
-    }
-
-    url
-  }
 }
 
 #[cfg(test)]
@@ -676,40 +614,5 @@ mod test {
     );
     let serialized_value = serde_json::to_value(&package_json).unwrap();
     assert_eq!(serialized_value, json_value);
-  }
-
-  #[test]
-  fn test_file_path_to_url_wasm() {
-    fn convert(path: &str) -> String {
-      file_path_to_url_wasm(Path::new(path)).to_string()
-    }
-
-    assert_eq!(convert("/a/b/c.json"), "file:///a/b/c.json");
-    assert_eq!(
-      convert("D:\\test\\other.json"),
-      "file:///D:/test/other.json"
-    );
-    assert_eq!(
-      convert("/path with spaces/and#special%chars!.json"),
-      "file:///path%20with%20spaces/and%23special%25chars!.json"
-    );
-    assert_eq!(
-      convert("C:\\My Documents\\file.txt"),
-      "file:///C:/My%20Documents/file.txt"
-    );
-    assert_eq!(
-      convert("/a/b/пример.txt"),
-      "file:///a/b/%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80.txt"
-    );
-    assert_eq!(
-      convert("\\\\server\\share\\folder\\file.txt"),
-      "file://server/share/folder/file.txt"
-    );
-    assert_eq!(convert(r#"\\?\UNC\server\share"#), "file://server/share");
-    assert_eq!(
-      convert(r"\\?\cat_pics\subfolder\file.jpg"),
-      "file:///cat_pics/subfolder/file.jpg"
-    );
-    assert_eq!(convert(r"\\?\cat_pics"), "file:///cat_pics");
   }
 }
