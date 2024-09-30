@@ -17,7 +17,7 @@ serde_json = "1.0.85"
 url = { version = "2.3.1" }
 thiserror = "1.0.61"
 deno_semver = "0.5.6"
-deno_path_util = "0.1.0"
+deno_path_util = "0.2.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
