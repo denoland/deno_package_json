@@ -42,8 +42,27 @@ pub enum PackageJsonDepValue {
   Workspace(VersionReq),
 }
 
-pub type PackageJsonDeps =
+pub type PackageJsonDepsMap =
   IndexMap<String, Result<PackageJsonDepValue, PackageJsonDepValueParseError>>;
+
+#[derive(Debug, Clone)]
+pub struct PackageJsonDeps {
+  pub dependencies: PackageJsonDepsMap,
+  pub dev_dependencies: PackageJsonDepsMap,
+}
+
+impl PackageJsonDeps {
+  /// Gets a package.json dependency entry by alias.
+  pub fn get(
+    &self,
+    alias: &str,
+  ) -> Option<&Result<PackageJsonDepValue, PackageJsonDepValueParseError>> {
+    self
+      .dependencies
+      .get(alias)
+      .or_else(|| self.dev_dependencies.get(alias))
+  }
+}
 
 #[derive(Debug, Error)]
 pub enum PackageJsonLoadError {
@@ -351,7 +370,7 @@ impl PackageJson {
 
     fn insert_deps(
       deps: Option<&IndexMap<String, String>>,
-      result: &mut PackageJsonDeps,
+      result: &mut PackageJsonDepsMap,
     ) {
       if let Some(deps) = deps {
         for (key, value) in deps {
@@ -364,13 +383,17 @@ impl PackageJson {
 
     let deps = self.dependencies.as_ref();
     let dev_deps = self.dev_dependencies.as_ref();
-    let mut result = IndexMap::new();
+    let mut result_deps = IndexMap::new();
+    let mut result_dev_deps = IndexMap::new();
 
     // favors the deps over dev_deps
-    insert_deps(deps, &mut result);
-    insert_deps(dev_deps, &mut result);
+    insert_deps(deps, &mut result_deps);
+    insert_deps(dev_deps, &mut result_dev_deps);
 
-    result
+    PackageJsonDeps {
+      dependencies: result_deps,
+      dev_dependencies: result_dev_deps,
+    }
   }
 }
 
@@ -421,9 +444,11 @@ mod test {
   fn get_local_package_json_version_reqs_for_tests(
     package_json: &PackageJson,
   ) -> IndexMap<String, Result<PackageJsonDepValue, String>> {
-    package_json
-      .resolve_local_package_json_deps()
+    let deps = package_json.resolve_local_package_json_deps();
+    deps
+      .dependencies
       .into_iter()
+      .chain(deps.dev_dependencies.into_iter())
       .map(|(k, v)| {
         (
           k,
@@ -449,31 +474,45 @@ mod test {
     ]));
     package_json.dev_dependencies = Some(IndexMap::from([
       ("package_b".to_string(), "~2.2".to_string()),
-      // should be ignored
       ("other".to_string(), "^3.2".to_string()),
     ]));
-    let deps = get_local_package_json_version_reqs_for_tests(&package_json);
+    let deps = package_json.resolve_local_package_json_deps();
     assert_eq!(
-      deps,
-      IndexMap::from([
+      deps
+        .dependencies
+        .into_iter()
+        .map(|d| (d.0, d.1.unwrap()))
+        .collect::<Vec<_>>(),
+      Vec::from([
         (
           "test".to_string(),
-          Ok(PackageJsonDepValue::Req(
-            PackageReq::from_str("test@^1.2").unwrap()
-          ))
+          PackageJsonDepValue::Req(PackageReq::from_str("test@^1.2").unwrap())
         ),
         (
           "other".to_string(),
-          Ok(PackageJsonDepValue::Req(
+          PackageJsonDepValue::Req(
             PackageReq::from_str("package@~1.3").unwrap()
-          ))
+          )
         ),
+      ])
+    );
+    assert_eq!(
+      deps
+        .dev_dependencies
+        .into_iter()
+        .map(|d| (d.0, d.1.unwrap()))
+        .collect::<Vec<_>>(),
+      Vec::from([
         (
           "package_b".to_string(),
-          Ok(PackageJsonDepValue::Req(
+          PackageJsonDepValue::Req(
             PackageReq::from_str("package_b@~2.2").unwrap()
-          ))
-        )
+          )
+        ),
+        (
+          "other".to_string(),
+          PackageJsonDepValue::Req(PackageReq::from_str("other@^3.2").unwrap())
+        ),
       ])
     );
   }
