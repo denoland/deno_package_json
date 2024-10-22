@@ -368,31 +368,22 @@ impl PackageJson {
       }
     }
 
-    fn insert_deps(
-      deps: Option<&IndexMap<String, String>>,
-      result: &mut PackageJsonDepsMap,
-    ) {
-      if let Some(deps) = deps {
-        for (key, value) in deps {
-          result
-            .entry(key.to_string())
-            .or_insert_with(|| parse_entry(key, value));
-        }
+    fn get_map(deps: Option<&IndexMap<String, String>>) -> PackageJsonDepsMap {
+      let Some(deps) = deps else {
+        return Default::default();
+      };
+      let mut result = IndexMap::with_capacity(deps.len());
+      for (key, value) in deps {
+        result
+          .entry(key.to_string())
+          .or_insert_with(|| parse_entry(key, value));
       }
+      result
     }
 
-    let deps = self.dependencies.as_ref();
-    let dev_deps = self.dev_dependencies.as_ref();
-    let mut result_deps = IndexMap::new();
-    let mut result_dev_deps = IndexMap::new();
-
-    // favors the deps over dev_deps
-    insert_deps(deps, &mut result_deps);
-    insert_deps(dev_deps, &mut result_dev_deps);
-
     PackageJsonDeps {
-      dependencies: result_deps,
-      dev_dependencies: result_dev_deps,
+      dependencies: get_map(self.dependencies.as_ref()),
+      dev_dependencies: get_map(self.dev_dependencies.as_ref()),
     }
   }
 }
