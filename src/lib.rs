@@ -439,7 +439,7 @@ mod test {
     deps
       .dependencies
       .into_iter()
-      .chain(deps.dev_dependencies.into_iter())
+      .chain(deps.dev_dependencies)
       .map(|(k, v)| {
         (
           k,
