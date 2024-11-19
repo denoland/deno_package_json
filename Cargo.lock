@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "deno_package_json"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "deno_path_util",
  "deno_semver",
