@@ -38,19 +38,15 @@ pub enum PackageJsonDepValueParseError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PackageJsonDepWorkspaceReq {
-  /// "workspace:*"
-  Star,
-
   /// "workspace:~"
   Tilde,
 
   /// "workspace:^"
   Caret,
 
-  /// "workspace:x.y.z"
+  /// "workspace:x.y.z", "workspace:*", "workspace:^x.y.z"
   VersionReq(VersionReq),
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PackageJsonDepValue {
@@ -361,12 +357,11 @@ impl PackageJson {
     ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
       if let Some(workspace_key) = value.strip_prefix("workspace:") {
         let workspace_req = match workspace_key {
-          "*" => PackageJsonDepWorkspaceReq::Star,
           "~" => PackageJsonDepWorkspaceReq::Tilde,
           "^" => PackageJsonDepWorkspaceReq::Caret,
-          _ => {  
-            PackageJsonDepWorkspaceReq::VersionReq(VersionReq::parse_from_npm(workspace_key)?)
-          }
+          _ => PackageJsonDepWorkspaceReq::VersionReq(
+            VersionReq::parse_from_npm(workspace_key)?,
+          ),
         };
         return Ok(PackageJsonDepValue::Workspace(workspace_req));
       }
@@ -592,7 +587,10 @@ mod test {
     .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "1".to_string()),
-      ("work-test-version-req".to_string(), "workspace:1.1.1".to_string()),
+      (
+        "work-test-version-req".to_string(),
+        "workspace:1.1.1".to_string(),
+      ),
       ("work-test-star".to_string(), "workspace:*".to_string()),
       ("work-test-tilde".to_string(), "workspace:~".to_string()),
       ("work-test-caret".to_string(), "workspace:^".to_string()),
@@ -630,13 +628,17 @@ mod test {
         (
           "work-test-version-req".to_string(),
           Ok(PackageJsonDepValue::Workspace(
-            PackageJsonDepWorkspaceReq::VersionReq(VersionReq::parse_from_npm("1.1.1").unwrap())
+            PackageJsonDepWorkspaceReq::VersionReq(
+              VersionReq::parse_from_npm("1.1.1").unwrap()
+            )
           ))
         ),
         (
           "work-test-star".to_string(),
           Ok(PackageJsonDepValue::Workspace(
-            PackageJsonDepWorkspaceReq::Star
+            PackageJsonDepWorkspaceReq::VersionReq(
+              VersionReq::parse_from_npm("*").unwrap()
+            )
           ))
         ),
         (
