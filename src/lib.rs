@@ -37,9 +37,25 @@ pub enum PackageJsonDepValueParseError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PackageJsonDepWorkspaceReq {
+  /// "workspace:*"
+  Star,
+
+  /// "workspace:~"
+  Tilde,
+
+  /// "workspace:^"
+  Caret,
+
+  /// "workspace:x.y.z"
+  VersionReq(VersionReq),
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PackageJsonDepValue {
   Req(PackageReq),
-  Workspace(VersionReq),
+  Workspace(PackageJsonDepWorkspaceReq),
 }
 
 pub type PackageJsonDepsMap =
@@ -344,8 +360,15 @@ impl PackageJson {
       value: &str,
     ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
       if let Some(workspace_key) = value.strip_prefix("workspace:") {
-        let version_req = VersionReq::parse_from_npm(workspace_key)?;
-        return Ok(PackageJsonDepValue::Workspace(version_req));
+        let workspace_req = match workspace_key {
+          "*" => PackageJsonDepWorkspaceReq::Star,
+          "~" => PackageJsonDepWorkspaceReq::Tilde,
+          "^" => PackageJsonDepWorkspaceReq::Caret,
+          _ => {  
+            PackageJsonDepWorkspaceReq::VersionReq(VersionReq::parse_from_npm(workspace_key)?)
+          }
+        };
+        return Ok(PackageJsonDepValue::Workspace(workspace_req));
       }
       if value.starts_with("file:")
         || value.starts_with("git:")
@@ -569,7 +592,10 @@ mod test {
     .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "1".to_string()),
-      ("work-test".to_string(), "workspace:1.1.1".to_string()),
+      ("work-test-version-req".to_string(), "workspace:1.1.1".to_string()),
+      ("work-test-star".to_string(), "workspace:*".to_string()),
+      ("work-test-tilde".to_string(), "workspace:~".to_string()),
+      ("work-test-caret".to_string(), "workspace:^".to_string()),
       ("file-test".to_string(), "file:something".to_string()),
       ("git-test".to_string(), "git:something".to_string()),
       ("http-test".to_string(), "http://something".to_string()),
@@ -602,11 +628,29 @@ mod test {
           ))
         ),
         (
-          "work-test".to_string(),
+          "work-test-version-req".to_string(),
           Ok(PackageJsonDepValue::Workspace(
-            VersionReq::parse_from_npm("1.1.1").unwrap()
+            PackageJsonDepWorkspaceReq::VersionReq(VersionReq::parse_from_npm("1.1.1").unwrap())
           ))
-        )
+        ),
+        (
+          "work-test-star".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::Star
+          ))
+        ),
+        (
+          "work-test-tilde".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::Tilde
+          ))
+        ),
+        (
+          "work-test-caret".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::Caret
+          ))
+        ),
       ])
     );
   }
