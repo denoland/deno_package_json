@@ -5,8 +5,6 @@
 #![deny(clippy::unused_async)]
 #![deny(clippy::unnecessary_wraps)]
 
-use std::path::Path;
-use std::path::PathBuf;
 use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
@@ -15,6 +13,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
+use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
