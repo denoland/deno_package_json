@@ -3,10 +3,9 @@
 #![deny(clippy::print_stderr)]
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
+#![deny(clippy::unnecessary_wraps)]
 
-use std::path::Path;
-use std::path::PathBuf;
-
+use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
 use deno_semver::VersionReq;
@@ -14,6 +13,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
+use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
@@ -28,10 +29,12 @@ pub trait PackageJsonCache {
   fn set(&self, path: PathBuf, package_json: PackageJsonRc);
 }
 
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, JsError)]
 pub enum PackageJsonDepValueParseError {
+  #[class(inherit)]
   #[error(transparent)]
   VersionReq(#[from] NpmVersionReqParseError),
+  #[class(type)]
   #[error("Not implemented scheme '{scheme}'")]
   Unsupported { scheme: String },
 }
@@ -64,18 +67,22 @@ impl PackageJsonDeps {
   }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum PackageJsonLoadError {
+  #[class(inherit)]
   #[error("Failed reading '{}'.", .path.display())]
   Io {
     path: PathBuf,
     #[source]
+    #[inherit]
     source: std::io::Error,
   },
+  #[class(inherit)]
   #[error("Malformed package.json '{}'.", .path.display())]
   Deserialize {
     path: PathBuf,
     #[source]
+    #[inherit]
     source: serde_json::Error,
   },
 }
@@ -419,6 +426,7 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
 mod test {
   use super::*;
   use pretty_assertions::assert_eq;
+  use std::error::Error;
   use std::path::PathBuf;
 
   #[test]
@@ -445,7 +453,10 @@ mod test {
           k,
           match v {
             Ok(v) => Ok(v),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(format!(
+              "{err}{}",
+              err.source().map(|e| format!("\n {e}")).unwrap_or_default()
+            )),
           },
         )
       })
@@ -520,14 +531,7 @@ mod test {
       map,
       IndexMap::from([(
         "test".to_string(),
-        Err(
-          concat!(
-            "Invalid npm version requirement. Unexpected character.\n",
-            "  %*(#$%()\n",
-            "  ~"
-          )
-          .to_string()
-        )
+        Err("Invalid version requirement\n Unexpected character.\n  %*(#$%()\n  ~".to_string())
       )])
     );
   }
