@@ -31,7 +31,7 @@ pub trait PackageJsonCache {
 
 #[derive(Debug, Error, Clone, JsError)]
 pub enum PackageJsonDepValueParseError {
-  #[class(generic)]
+  #[class(inherit)]
   #[error(transparent)]
   VersionReq(#[from] NpmVersionReqParseError),
   #[class(type)]
@@ -426,6 +426,7 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
 mod test {
   use super::*;
   use pretty_assertions::assert_eq;
+  use std::error::Error;
   use std::path::PathBuf;
 
   #[test]
@@ -452,7 +453,10 @@ mod test {
           k,
           match v {
             Ok(v) => Ok(v),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(format!(
+              "{err}{}",
+              err.source().map(|e| format!("\n {e}")).unwrap_or_default()
+            )),
           },
         )
       })
@@ -531,14 +535,7 @@ mod test {
       map,
       IndexMap::from([(
         "test".to_string(),
-        Err(
-          concat!(
-            "Invalid npm version requirement. Unexpected character.\n",
-            "  %*(#$%()\n",
-            "  ~"
-          )
-          .to_string()
-        )
+        Err("Invalid version requirement\n Unexpected character.\n  %*(#$%()\n  ~".to_string())
       )])
     );
   }
