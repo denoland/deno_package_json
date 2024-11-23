@@ -3,10 +3,11 @@
 #![deny(clippy::print_stderr)]
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
+#![deny(clippy::unnecessary_wraps)]
 
 use std::path::Path;
 use std::path::PathBuf;
-
+use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
 use deno_semver::VersionReq;
@@ -28,10 +29,12 @@ pub trait PackageJsonCache {
   fn set(&self, path: PathBuf, package_json: PackageJsonRc);
 }
 
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, JsError)]
 pub enum PackageJsonDepValueParseError {
+  #[class(generic)]
   #[error(transparent)]
   VersionReq(#[from] NpmVersionReqParseError),
+  #[class(type)]
   #[error("Not implemented scheme '{scheme}'")]
   Unsupported { scheme: String },
 }
@@ -64,18 +67,22 @@ impl PackageJsonDeps {
   }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum PackageJsonLoadError {
+  #[class(inherit)]
   #[error("Failed reading '{}'.", .path.display())]
   Io {
     path: PathBuf,
     #[source]
+    #[inherit]
     source: std::io::Error,
   },
+  #[class(inherit)]
   #[error("Malformed package.json '{}'.", .path.display())]
   Deserialize {
     path: PathBuf,
     #[source]
+    #[inherit]
     source: serde_json::Error,
   },
 }
