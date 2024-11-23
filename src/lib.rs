@@ -119,7 +119,7 @@ impl PackageJson {
       match fs.read_to_string_lossy(path) {
         Ok(file_text) => {
           let pkg_json =
-            PackageJson::load_from_string(path.to_path_buf(), file_text)?;
+            PackageJson::load_from_string(path.to_path_buf(), &file_text)?;
           let pkg_json = crate::sync::new_rc(pkg_json);
           if let Some(cache) = maybe_cache {
             cache.set(path.to_path_buf(), pkg_json.clone());
@@ -136,7 +136,7 @@ impl PackageJson {
 
   pub fn load_from_string(
     path: PathBuf,
-    source: String,
+    source: &str,
   ) -> Result<PackageJson, PackageJsonLoadError> {
     if source.trim().is_empty() {
       return Ok(PackageJson {
@@ -157,7 +157,7 @@ impl PackageJson {
       });
     }
 
-    let package_json: Value = serde_json::from_str(&source).map_err(|err| {
+    let package_json: Value = serde_json::from_str(source).map_err(|err| {
       PackageJsonLoadError::Deserialize {
         path: path.clone(),
         source: err,
@@ -425,7 +425,7 @@ mod test {
   fn null_exports_should_not_crash() {
     let package_json = PackageJson::load_from_string(
       PathBuf::from("/package.json"),
-      r#"{ "exports": null }"#.to_string(),
+      r#"{ "exports": null }"#,
     )
     .unwrap();
 
@@ -454,11 +454,9 @@ mod test {
 
   #[test]
   fn test_get_local_package_json_version_reqs() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "^1.2".to_string()),
       ("other".to_string(), "npm:package@~1.3".to_string()),
@@ -510,11 +508,9 @@ mod test {
 
   #[test]
   fn test_get_local_package_json_version_reqs_errors_non_npm_specifier() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([(
       "test".to_string(),
       "%*(#$%()".to_string(),
@@ -538,11 +534,9 @@ mod test {
 
   #[test]
   fn test_get_local_package_json_version_reqs_range() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([(
       "test".to_string(),
       "1.x - 1.3".to_string(),
@@ -562,11 +556,9 @@ mod test {
 
   #[test]
   fn test_get_local_package_json_version_reqs_skips_certain_specifiers() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "1".to_string()),
       ("work-test".to_string(), "workspace:1.1.1".to_string()),
