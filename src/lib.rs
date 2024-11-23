@@ -157,7 +157,7 @@ impl PackageJson {
       });
     }
 
-    let package_json: Value = serde_json::from_str(&source).map_err(|err| {
+    let package_json: Value = serde_json::from_str(source).map_err(|err| {
       PackageJsonLoadError::Deserialize {
         path: path.clone(),
         source: err,
