@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "deno_package_json"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "deno_error",
  "deno_path_util",
