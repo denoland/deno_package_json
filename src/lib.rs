@@ -7,6 +7,7 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
@@ -24,6 +25,8 @@ mod sync;
 
 #[allow(clippy::disallowed_types)]
 pub type PackageJsonRc = crate::sync::MaybeArc<PackageJson>;
+#[allow(clippy::disallowed_types)]
+pub type PackageJsonDepsRc = crate::sync::MaybeArc<PackageJsonDeps>;
 
 pub trait PackageJsonCache {
   fn get(&self, path: &Path) -> Option<PackageJsonRc>;
@@ -125,6 +128,8 @@ pub struct PackageJson {
   pub dev_dependencies: Option<IndexMap<String, String>>,
   pub scripts: Option<IndexMap<String, String>>,
   pub workspaces: Option<Vec<String>>,
+  #[serde(skip_serializing)]
+  resolved_deps: OnceLock<PackageJsonDepsRc>,
 }
 
 impl PackageJson {
@@ -174,6 +179,7 @@ impl PackageJson {
         dev_dependencies: None,
         scripts: None,
         workspaces: None,
+        resolved_deps: OnceLock::new(),
       });
     }
 
@@ -315,6 +321,7 @@ impl PackageJson {
       dev_dependencies,
       scripts,
       workspaces,
+      resolved_deps: OnceLock::new(),
     }
   }
 
@@ -336,7 +343,7 @@ impl PackageJson {
   }
 
   /// Resolve the package.json's dependencies.
-  pub fn resolve_local_package_json_deps(&self) -> PackageJsonDeps {
+  pub fn resolve_local_package_json_deps(&self) -> &PackageJsonDepsRc {
     /// Gets the name and raw version constraint for a registry info or
     /// package.json dependency entry taking into account npm package aliases.
     fn parse_dep_entry_name_and_raw_version<'a>(
@@ -407,10 +414,12 @@ impl PackageJson {
       result
     }
 
-    PackageJsonDeps {
-      dependencies: get_map(self.dependencies.as_ref()),
-      dev_dependencies: get_map(self.dev_dependencies.as_ref()),
-    }
+    self.resolved_deps.get_or_init(|| {
+      PackageJsonDepsRc::new(PackageJsonDeps {
+        dependencies: get_map(self.dependencies.as_ref()),
+        dev_dependencies: get_map(self.dev_dependencies.as_ref()),
+      })
+    })
   }
 }
 
@@ -468,8 +477,9 @@ mod test {
     let deps = package_json.resolve_local_package_json_deps();
     deps
       .dependencies
+      .clone()
       .into_iter()
-      .chain(deps.dev_dependencies)
+      .chain(deps.dev_dependencies.clone())
       .map(|(k, v)| {
         (
           k,
@@ -499,6 +509,7 @@ mod test {
     assert_eq!(
       deps
         .dependencies
+        .clone()
         .into_iter()
         .map(|d| (d.0, d.1.unwrap()))
         .collect::<Vec<_>>(),
@@ -518,6 +529,7 @@ mod test {
     assert_eq!(
       deps
         .dev_dependencies
+        .clone()
         .into_iter()
         .map(|d| (d.0, d.1.unwrap()))
         .collect::<Vec<_>>(),
@@ -584,7 +596,13 @@ mod test {
         .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "1".to_string()),
-      ("work-test".to_string(), "workspace:1.1.1".to_string()),
+      (
+        "work-test-version-req".to_string(),
+        "workspace:1.1.1".to_string(),
+      ),
+      ("work-test-star".to_string(), "workspace:*".to_string()),
+      ("work-test-tilde".to_string(), "workspace:~".to_string()),
+      ("work-test-caret".to_string(), "workspace:^".to_string()),
       ("file-test".to_string(), "file:something".to_string()),
       ("git-test".to_string(), "git:something".to_string()),
       ("http-test".to_string(), "http://something".to_string()),
@@ -594,6 +612,40 @@ mod test {
     assert_eq!(
       result,
       IndexMap::from([
+        (
+          "test".to_string(),
+          Ok(PackageJsonDepValue::Req(
+            PackageReq::from_str("test@1").unwrap()
+          ))
+        ),
+        (
+          "work-test-star".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::VersionReq(
+              VersionReq::parse_from_npm("*").unwrap()
+            )
+          ))
+        ),
+        (
+          "work-test-version-req".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::VersionReq(
+              VersionReq::parse_from_npm("1.1.1").unwrap()
+            )
+          ))
+        ),
+        (
+          "work-test-tilde".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::Tilde
+          ))
+        ),
+        (
+          "work-test-caret".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::Caret
+          ))
+        ),
         (
           "file-test".to_string(),
           Err(PackageJsonDepValueParseError::Unsupported {
@@ -618,18 +670,6 @@ mod test {
             scheme: "https".to_string()
           }),
         ),
-        (
-          "test".to_string(),
-          Ok(PackageJsonDepValue::Req(
-            PackageReq::from_str("test@1").unwrap()
-          ))
-        ),
-        (
-          "work-test".to_string(),
-          Ok(PackageJsonDepValue::Workspace(
-            VersionReq::parse_from_npm("1.1.1").unwrap()
-          ))
-        )
       ])
     );
   }
