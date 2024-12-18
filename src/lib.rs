@@ -124,6 +124,9 @@ pub struct PackageJson {
   pub dev_dependencies: Option<IndexMap<String, String>>,
   pub scripts: Option<IndexMap<String, String>>,
   pub workspaces: Option<Vec<String>>,
+
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub private: Option<bool>,
 }
 
 impl PackageJson {
@@ -173,6 +176,7 @@ impl PackageJson {
         dev_dependencies: None,
         scripts: None,
         workspaces: None,
+        private: None,
       });
     }
 
@@ -202,6 +206,13 @@ impl PackageJson {
         Some(result)
       } else {
         None
+      }
+    }
+
+    fn map_bool(value: serde_json::Value) -> Option<bool> {
+      match value {
+        Value::Bool(v) => Some(v),
+        _ => None,
       }
     }
 
@@ -264,6 +275,7 @@ impl PackageJson {
     let name = name_val.and_then(map_string);
     let version = version_val.and_then(map_string);
     let module = module_val.and_then(map_string);
+    let private = package_json.remove("private").and_then(map_bool);
 
     let dependencies = package_json
       .remove("dependencies")
@@ -314,6 +326,7 @@ impl PackageJson {
       dev_dependencies,
       scripts,
       workspaces,
+      private,
     }
   }
 
@@ -658,6 +671,42 @@ mod test {
     let json_value = serde_json::json!({
       "name": "test",
       "version": "1",
+      "exports": {
+        ".": "./main.js",
+      },
+      "bin": "./main.js",
+      "types": "./types.d.ts",
+      "imports": {
+        "#test": "./main.js",
+      },
+      "main": "./main.js",
+      "module": "./module.js",
+      "type": "module",
+      "dependencies": {
+        "name": "1.2",
+      },
+      "devDependencies": {
+        "name": "1.2",
+      },
+      "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+      },
+      "workspaces": ["asdf", "asdf2"]
+    });
+    let package_json = PackageJson::load_from_value(
+      PathBuf::from("/package.json"),
+      json_value.clone(),
+    );
+    let serialized_value = serde_json::to_value(&package_json).unwrap();
+    assert_eq!(serialized_value, json_value);
+  }
+
+  #[test]
+  fn test_deserialize_serialize_2() {
+    let json_value = serde_json::json!({
+      "name": "test",
+      "version": "1",
+      "private": true,
       "exports": {
         ".": "./main.js",
       },
