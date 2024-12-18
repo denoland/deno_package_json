@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
@@ -27,6 +26,8 @@ mod sync;
 pub type PackageJsonRc = crate::sync::MaybeArc<PackageJson>;
 #[allow(clippy::disallowed_types)]
 pub type PackageJsonDepsRc = crate::sync::MaybeArc<PackageJsonDeps>;
+#[allow(clippy::disallowed_types)]
+type PackageJsonDepsRcCell = crate::sync::MaybeOnceLock<PackageJsonDepsRc>;
 
 pub trait PackageJsonCache {
   fn get(&self, path: &Path) -> Option<PackageJsonRc>;
@@ -129,7 +130,7 @@ pub struct PackageJson {
   pub scripts: Option<IndexMap<String, String>>,
   pub workspaces: Option<Vec<String>>,
   #[serde(skip_serializing)]
-  resolved_deps: OnceLock<PackageJsonDepsRc>,
+  resolved_deps: PackageJsonDepsRcCell,
 }
 
 impl PackageJson {
@@ -179,7 +180,7 @@ impl PackageJson {
         dev_dependencies: None,
         scripts: None,
         workspaces: None,
-        resolved_deps: OnceLock::new(),
+        resolved_deps: Default::default(),
       });
     }
 
@@ -321,7 +322,7 @@ impl PackageJson {
       dev_dependencies,
       scripts,
       workspaces,
-      resolved_deps: OnceLock::new(),
+      resolved_deps: Default::default(),
     }
   }
 
