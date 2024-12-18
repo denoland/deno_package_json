@@ -5,6 +5,9 @@
 #![deny(clippy::unused_async)]
 #![deny(clippy::unnecessary_wraps)]
 
+use std::path::Path;
+use std::path::PathBuf;
+
 use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
@@ -13,8 +16,6 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
-use std::path::Path;
-use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
@@ -29,7 +30,7 @@ pub trait PackageJsonCache {
   fn set(&self, path: PathBuf, package_json: PackageJsonRc);
 }
 
-#[derive(Debug, Error, Clone, JsError)]
+#[derive(Debug, Error, Clone, JsError, PartialEq, Eq)]
 pub enum PackageJsonDepValueParseError {
   #[class(inherit)]
   #[error(transparent)]
@@ -386,7 +387,7 @@ impl PackageJson {
       let result = VersionReq::parse_from_npm(version_req);
       match result {
         Ok(version_req) => Ok(PackageJsonDepValue::Req(PackageReq {
-          name: name.to_string(),
+          name: name.into(),
           version_req,
         })),
         Err(err) => Err(PackageJsonDepValueParseError::VersionReq(err)),
@@ -460,7 +461,10 @@ mod test {
 
   fn get_local_package_json_version_reqs_for_tests(
     package_json: &PackageJson,
-  ) -> IndexMap<String, Result<PackageJsonDepValue, String>> {
+  ) -> IndexMap<
+    String,
+    Result<PackageJsonDepValue, PackageJsonDepValueParseError>,
+  > {
     let deps = package_json.resolve_local_package_json_deps();
     deps
       .dependencies
@@ -471,10 +475,7 @@ mod test {
           k,
           match v {
             Ok(v) => Ok(v),
-            Err(err) => Err(format!(
-              "{err}{}",
-              err.source().map(|e| format!("\n {e}")).unwrap_or_default()
-            )),
+            Err(err) => Err(err),
           },
         )
       })
@@ -545,12 +546,12 @@ mod test {
       "%*(#$%()".to_string(),
     )]));
     let map = get_local_package_json_version_reqs_for_tests(&package_json);
+    assert_eq!(map.len(), 1);
+    let err = map.get("test").unwrap().as_ref().unwrap_err();
+    assert_eq!(format!("{}", err), "Invalid version requirement");
     assert_eq!(
-      map,
-      IndexMap::from([(
-        "test".to_string(),
-        Err("Invalid version requirement\n Unexpected character.\n  %*(#$%()\n  ~".to_string())
-      )])
+      format!("{}", err.source().unwrap()),
+      concat!("Unexpected character.\n", "  %*(#$%()\n", "  ~")
     );
   }
 
@@ -569,7 +570,7 @@ mod test {
       IndexMap::from([(
         "test".to_string(),
         Ok(PackageJsonDepValue::Req(PackageReq {
-          name: "test".to_string(),
+          name: "test".into(),
           version_req: VersionReq::parse_from_npm("1.x - 1.3").unwrap()
         }))
       )])
@@ -583,13 +584,7 @@ mod test {
         .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "1".to_string()),
-      (
-        "work-test-version-req".to_string(),
-        "workspace:1.1.1".to_string(),
-      ),
-      ("work-test-star".to_string(), "workspace:*".to_string()),
-      ("work-test-tilde".to_string(), "workspace:~".to_string()),
-      ("work-test-caret".to_string(), "workspace:^".to_string()),
+      ("work-test".to_string(), "workspace:1.1.1".to_string()),
       ("file-test".to_string(), "file:something".to_string()),
       ("git-test".to_string(), "git:something".to_string()),
       ("http-test".to_string(), "http://something".to_string()),
@@ -601,19 +596,27 @@ mod test {
       IndexMap::from([
         (
           "file-test".to_string(),
-          Err("Not implemented scheme 'file'".to_string()),
+          Err(PackageJsonDepValueParseError::Unsupported {
+            scheme: "file".to_string()
+          }),
         ),
         (
           "git-test".to_string(),
-          Err("Not implemented scheme 'git'".to_string()),
+          Err(PackageJsonDepValueParseError::Unsupported {
+            scheme: "git".to_string()
+          }),
         ),
         (
           "http-test".to_string(),
-          Err("Not implemented scheme 'http'".to_string()),
+          Err(PackageJsonDepValueParseError::Unsupported {
+            scheme: "http".to_string()
+          }),
         ),
         (
           "https-test".to_string(),
-          Err("Not implemented scheme 'https'".to_string()),
+          Err(PackageJsonDepValueParseError::Unsupported {
+            scheme: "https".to_string()
+          }),
         ),
         (
           "test".to_string(),
@@ -622,33 +625,11 @@ mod test {
           ))
         ),
         (
-          "work-test-version-req".to_string(),
+          "work-test".to_string(),
           Ok(PackageJsonDepValue::Workspace(
-            PackageJsonDepWorkspaceReq::VersionReq(
-              VersionReq::parse_from_npm("1.1.1").unwrap()
-            )
+            VersionReq::parse_from_npm("1.1.1").unwrap()
           ))
-        ),
-        (
-          "work-test-star".to_string(),
-          Ok(PackageJsonDepValue::Workspace(
-            PackageJsonDepWorkspaceReq::VersionReq(
-              VersionReq::parse_from_npm("*").unwrap()
-            )
-          ))
-        ),
-        (
-          "work-test-tilde".to_string(),
-          Ok(PackageJsonDepValue::Workspace(
-            PackageJsonDepWorkspaceReq::Tilde
-          ))
-        ),
-        (
-          "work-test-caret".to_string(),
-          Ok(PackageJsonDepValue::Workspace(
-            PackageJsonDepWorkspaceReq::Caret
-          ))
-        ),
+        )
       ])
     );
   }
