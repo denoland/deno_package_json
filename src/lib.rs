@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
+use deno_semver::StackString;
 use deno_semver::VersionReq;
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -62,8 +63,10 @@ pub enum PackageJsonDepValue {
   Workspace(PackageJsonDepWorkspaceReq),
 }
 
-pub type PackageJsonDepsMap =
-  IndexMap<String, Result<PackageJsonDepValue, PackageJsonDepValueParseError>>;
+pub type PackageJsonDepsMap = IndexMap<
+  StackString,
+  Result<PackageJsonDepValue, Box<PackageJsonDepValueParseError>>,
+>;
 
 #[derive(Debug, Clone)]
 pub struct PackageJsonDeps {
@@ -76,7 +79,8 @@ impl PackageJsonDeps {
   pub fn get(
     &self,
     alias: &str,
-  ) -> Option<&Result<PackageJsonDepValue, PackageJsonDepValueParseError>> {
+  ) -> Option<&Result<PackageJsonDepValue, Box<PackageJsonDepValueParseError>>>
+  {
     self
       .dependencies
       .get(alias)
@@ -370,13 +374,14 @@ impl PackageJson {
     fn parse_entry(
       key: &str,
       value: &str,
-    ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
+    ) -> Result<PackageJsonDepValue, Box<PackageJsonDepValueParseError>> {
       if let Some(workspace_key) = value.strip_prefix("workspace:") {
         let workspace_req = match workspace_key {
           "~" => PackageJsonDepWorkspaceReq::Tilde,
           "^" => PackageJsonDepWorkspaceReq::Caret,
           _ => PackageJsonDepWorkspaceReq::VersionReq(
-            VersionReq::parse_from_npm(workspace_key)?,
+            VersionReq::parse_from_npm(workspace_key)
+              .map_err(|err| Box::new(err.into()))?,
           ),
         };
         return Ok(PackageJsonDepValue::Workspace(workspace_req));
@@ -386,9 +391,9 @@ impl PackageJson {
         || value.starts_with("http:")
         || value.starts_with("https:")
       {
-        return Err(PackageJsonDepValueParseError::Unsupported {
+        return Err(Box::new(PackageJsonDepValueParseError::Unsupported {
           scheme: value.split(':').next().unwrap().to_string(),
-        });
+        }));
       }
       let (name, version_req) =
         parse_dep_entry_name_and_raw_version(key, value);
@@ -398,7 +403,9 @@ impl PackageJson {
           name: name.into(),
           version_req,
         })),
-        Err(err) => Err(PackageJsonDepValueParseError::VersionReq(err)),
+        Err(err) => {
+          Err(Box::new(PackageJsonDepValueParseError::VersionReq(err)))
+        }
       }
     }
 
@@ -409,7 +416,7 @@ impl PackageJson {
       let mut result = IndexMap::with_capacity(deps.len());
       for (key, value) in deps {
         result
-          .entry(key.to_string())
+          .entry(StackString::from(key.as_str()))
           .or_insert_with(|| parse_entry(key, value));
       }
       result
@@ -483,10 +490,10 @@ mod test {
       .chain(deps.dev_dependencies.clone())
       .map(|(k, v)| {
         (
-          k,
+          k.to_string(),
           match v {
             Ok(v) => Ok(v),
-            Err(err) => Err(err),
+            Err(err) => Err(*err),
           },
         )
       })
@@ -516,11 +523,11 @@ mod test {
         .collect::<Vec<_>>(),
       Vec::from([
         (
-          "test".to_string(),
+          "test".into(),
           PackageJsonDepValue::Req(PackageReq::from_str("test@^1.2").unwrap())
         ),
         (
-          "other".to_string(),
+          "other".into(),
           PackageJsonDepValue::Req(
             PackageReq::from_str("package@~1.3").unwrap()
           )
@@ -536,13 +543,13 @@ mod test {
         .collect::<Vec<_>>(),
       Vec::from([
         (
-          "package_b".to_string(),
+          "package_b".into(),
           PackageJsonDepValue::Req(
             PackageReq::from_str("package_b@~2.2").unwrap()
           )
         ),
         (
-          "other".to_string(),
+          "other".into(),
           PackageJsonDepValue::Req(PackageReq::from_str("other@^3.2").unwrap())
         ),
       ])
