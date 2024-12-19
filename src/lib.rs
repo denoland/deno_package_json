@@ -8,6 +8,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use boxed_error::Boxed;
 use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
@@ -35,8 +36,13 @@ pub trait PackageJsonCache {
   fn set(&self, path: PathBuf, package_json: PackageJsonRc);
 }
 
+#[derive(Debug, Clone, JsError, PartialEq, Eq, Boxed)]
+pub struct PackageJsonDepValueParseError(
+  pub Box<PackageJsonDepValueParseErrorKind>,
+);
+
 #[derive(Debug, Error, Clone, JsError, PartialEq, Eq)]
-pub enum PackageJsonDepValueParseError {
+pub enum PackageJsonDepValueParseErrorKind {
   #[class(inherit)]
   #[error(transparent)]
   VersionReq(#[from] NpmVersionReqParseError),
@@ -65,7 +71,7 @@ pub enum PackageJsonDepValue {
 
 pub type PackageJsonDepsMap = IndexMap<
   StackString,
-  Result<PackageJsonDepValue, Box<PackageJsonDepValueParseError>>,
+  Result<PackageJsonDepValue, PackageJsonDepValueParseError>,
 >;
 
 #[derive(Debug, Clone)]
@@ -79,8 +85,7 @@ impl PackageJsonDeps {
   pub fn get(
     &self,
     alias: &str,
-  ) -> Option<&Result<PackageJsonDepValue, Box<PackageJsonDepValueParseError>>>
-  {
+  ) -> Option<&Result<PackageJsonDepValue, PackageJsonDepValueParseError>> {
     self
       .dependencies
       .get(alias)
@@ -374,14 +379,13 @@ impl PackageJson {
     fn parse_entry(
       key: &str,
       value: &str,
-    ) -> Result<PackageJsonDepValue, Box<PackageJsonDepValueParseError>> {
+    ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
       if let Some(workspace_key) = value.strip_prefix("workspace:") {
         let workspace_req = match workspace_key {
           "~" => PackageJsonDepWorkspaceReq::Tilde,
           "^" => PackageJsonDepWorkspaceReq::Caret,
           _ => PackageJsonDepWorkspaceReq::VersionReq(
-            VersionReq::parse_from_npm(workspace_key)
-              .map_err(|err| Box::new(err.into()))?,
+            VersionReq::parse_from_npm(workspace_key)?,
           ),
         };
         return Ok(PackageJsonDepValue::Workspace(workspace_req));
@@ -391,9 +395,12 @@ impl PackageJson {
         || value.starts_with("http:")
         || value.starts_with("https:")
       {
-        return Err(Box::new(PackageJsonDepValueParseError::Unsupported {
-          scheme: value.split(':').next().unwrap().to_string(),
-        }));
+        return Err(
+          PackageJsonDepValueParseErrorKind::Unsupported {
+            scheme: value.split(':').next().unwrap().to_string(),
+          }
+          .into_box(),
+        );
       }
       let (name, version_req) =
         parse_dep_entry_name_and_raw_version(key, value);
@@ -404,7 +411,7 @@ impl PackageJson {
           version_req,
         })),
         Err(err) => {
-          Err(Box::new(PackageJsonDepValueParseError::VersionReq(err)))
+          Err(PackageJsonDepValueParseErrorKind::VersionReq(err).into_box())
         }
       }
     }
@@ -480,7 +487,7 @@ mod test {
     package_json: &PackageJson,
   ) -> IndexMap<
     String,
-    Result<PackageJsonDepValue, PackageJsonDepValueParseError>,
+    Result<PackageJsonDepValue, PackageJsonDepValueParseErrorKind>,
   > {
     let deps = package_json.resolve_local_package_json_deps();
     deps
@@ -493,7 +500,7 @@ mod test {
           k.to_string(),
           match v {
             Ok(v) => Ok(v),
-            Err(err) => Err(*err),
+            Err(err) => Err(err.into_kind()),
           },
         )
       })
@@ -656,25 +663,25 @@ mod test {
         ),
         (
           "file-test".to_string(),
-          Err(PackageJsonDepValueParseError::Unsupported {
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
             scheme: "file".to_string()
           }),
         ),
         (
           "git-test".to_string(),
-          Err(PackageJsonDepValueParseError::Unsupported {
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
             scheme: "git".to_string()
           }),
         ),
         (
           "http-test".to_string(),
-          Err(PackageJsonDepValueParseError::Unsupported {
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
             scheme: "http".to_string()
           }),
         ),
         (
           "https-test".to_string(),
-          Err(PackageJsonDepValueParseError::Unsupported {
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
             scheme: "https".to_string()
           }),
         ),
