@@ -40,4 +40,5 @@ disallowed-methods = [
 ]
 disallowed-types = [
   { path = "std::sync::Arc", reason = "use crate::sync::MaybeArc instead" },
+  { path = "std::sync::OnceLock", reason = "use crate::sync::MaybeOnceLock instead" },
 ]

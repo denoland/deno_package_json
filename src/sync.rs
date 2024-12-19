@@ -6,10 +6,12 @@ pub use inner::*;
 mod inner {
   #![allow(clippy::disallowed_types)]
   pub use std::sync::Arc as MaybeArc;
+  pub use std::sync::OnceLock as MaybeOnceLock;
 }
 
 #[cfg(not(feature = "sync"))]
 mod inner {
+  pub use std::cell::OnceCell as MaybeOnceLock;
   pub use std::rc::Rc as MaybeArc;
 }
 
