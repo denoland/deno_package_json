@@ -10,7 +10,7 @@ pub trait DenoPkgJsonFs {
   ) -> Result<Cow<'static, str>, std::io::Error>;
 }
 
-impl<'a> Default for &'a dyn DenoPkgJsonFs {
+impl Default for &dyn DenoPkgJsonFs {
   fn default() -> Self {
     &RealDenoPkgJsonFs
   }
