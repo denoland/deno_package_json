@@ -18,10 +18,10 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
+use sys_traits::FsRead;
 use thiserror::Error;
 use url::Url;
 
-pub mod fs;
 mod sync;
 
 #[allow(clippy::disallowed_types)]
@@ -144,14 +144,14 @@ pub struct PackageJson {
 
 impl PackageJson {
   pub fn load_from_path(
-    path: &Path,
-    fs: &dyn crate::fs::DenoPkgJsonFs,
+    sys: &impl FsRead,
     maybe_cache: Option<&dyn PackageJsonCache>,
+    path: &Path,
   ) -> Result<PackageJsonRc, PackageJsonLoadError> {
     if let Some(item) = maybe_cache.and_then(|c| c.get(path)) {
       Ok(item)
     } else {
-      match fs.read_to_string_lossy(path) {
+      match sys.fs_read_to_string_lossy(path) {
         Ok(file_text) => {
           let pkg_json =
             PackageJson::load_from_string(path.to_path_buf(), &file_text)?;
