@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "deno_package_json"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "boxed_error",
  "deno_error",
