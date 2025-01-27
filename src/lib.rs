@@ -31,7 +31,7 @@ pub type PackageJsonDepsRc = crate::sync::MaybeArc<PackageJsonDeps>;
 #[allow(clippy::disallowed_types)]
 type PackageJsonDepsRcCell = crate::sync::MaybeOnceLock<PackageJsonDepsRc>;
 
-pub trait PackageJsonCache: std::fmt::Debug {
+pub trait PackageJsonCache {
   fn get(&self, path: &Path) -> Option<PackageJsonRc>;
   fn set(&self, path: PathBuf, package_json: PackageJsonRc);
 }
