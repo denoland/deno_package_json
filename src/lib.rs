@@ -111,6 +111,9 @@ pub enum PackageJsonLoadError {
     #[inherit]
     source: serde_json::Error,
   },
+  #[error("\"exports\" cannot contains some keys starting with '.' and some not.\nThe exports object must either be an object of package subpath keys\nor an object of main entry condition name keys only.")]
+  #[class(type)]
+  InvalidExports,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,13 +202,13 @@ impl PackageJson {
         source: err,
       }
     })?;
-    Ok(Self::load_from_value(path, package_json))
+    Self::load_from_value(path, package_json)
   }
 
   pub fn load_from_value(
     path: PathBuf,
     package_json: serde_json::Value,
-  ) -> PackageJson {
+  ) -> Result<PackageJson, PackageJsonLoadError> {
     fn parse_string_map(
       value: serde_json::Value,
     ) -> Option<IndexMap<String, String>> {
@@ -266,15 +269,19 @@ impl PackageJson {
     let version_val = package_json.remove("version");
     let type_val = package_json.remove("type");
     let bin = package_json.remove("bin");
-    let exports = package_json.remove("exports").and_then(|exports| {
-      Some(if is_conditional_exports_main_sugar(&exports) {
-        let mut map = Map::new();
-        map.insert(".".to_string(), exports.to_owned());
-        map
-      } else {
-        exports.as_object()?.to_owned()
+    let exports = package_json
+      .remove("exports")
+      .map(|exports| {
+        if is_conditional_exports_main_sugar(&exports)? {
+          let mut map = Map::new();
+          map.insert(".".to_string(), exports.to_owned());
+          Ok::<_, PackageJsonLoadError>(Some(map))
+        } else {
+          Ok(exports.as_object().map(|o| o.to_owned()))
+        }
       })
-    });
+      .transpose()?
+      .flatten();
 
     let imports = imports_val.and_then(map_object);
     let main = main_val.and_then(map_string);
@@ -316,7 +323,7 @@ impl PackageJson {
       .remove("workspaces")
       .and_then(parse_string_array);
 
-    PackageJson {
+    Ok(PackageJson {
       path,
       main,
       name,
@@ -332,7 +339,7 @@ impl PackageJson {
       scripts,
       workspaces,
       resolved_deps: Default::default(),
-    }
+    })
   }
 
   pub fn specifier(&self) -> Url {
@@ -438,13 +445,15 @@ impl PackageJson {
   }
 }
 
-fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
+fn is_conditional_exports_main_sugar(
+  exports: &Value,
+) -> Result<bool, PackageJsonLoadError> {
   if exports.is_string() || exports.is_array() {
-    return true;
+    return Ok(true);
   }
 
   if exports.is_null() || !exports.is_object() {
-    return false;
+    return Ok(false);
   }
 
   let exports_obj = exports.as_object().unwrap();
@@ -456,13 +465,11 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
       is_conditional_sugar = cur_is_conditional_sugar;
       i += 1;
     } else if is_conditional_sugar != cur_is_conditional_sugar {
-      panic!("\"exports\" cannot contains some keys starting with \'.\' and some not.
-        The exports object must either be an object of package subpath keys
-        or an object of main entry condition name keys only.")
+      return Err(PackageJsonLoadError::InvalidExports);
     }
   }
 
-  is_conditional_sugar
+  Ok(is_conditional_sugar)
 }
 
 #[cfg(test)]
@@ -719,8 +726,26 @@ mod test {
     let package_json = PackageJson::load_from_value(
       PathBuf::from("/package.json"),
       json_value.clone(),
-    );
+    )
+    .unwrap();
     let serialized_value = serde_json::to_value(&package_json).unwrap();
     assert_eq!(serialized_value, json_value);
+  }
+
+  // https://github.com/denoland/deno/issues/26031
+  #[test]
+  fn test_exports_error() {
+    let json_value = serde_json::json!({
+      "name": "test",
+      "version": "1",
+      "exports": { ".": "./a", "a": "./a" },
+    });
+    assert!(matches!(
+      PackageJson::load_from_value(
+        PathBuf::from("/package.json"),
+        json_value.clone(),
+      ),
+      Err(PackageJsonLoadError::InvalidExports)
+    ));
   }
 }
