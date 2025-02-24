@@ -3,60 +3,112 @@
 #![deny(clippy::print_stderr)]
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
+#![deny(clippy::unnecessary_wraps)]
 
 use std::path::Path;
 use std::path::PathBuf;
 
+use boxed_error::Boxed;
+use deno_error::JsError;
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
+use deno_semver::StackString;
 use deno_semver::VersionReq;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
+use sys_traits::FsRead;
 use thiserror::Error;
 use url::Url;
 
-pub mod fs;
 mod sync;
 
 #[allow(clippy::disallowed_types)]
 pub type PackageJsonRc = crate::sync::MaybeArc<PackageJson>;
+#[allow(clippy::disallowed_types)]
+pub type PackageJsonDepsRc = crate::sync::MaybeArc<PackageJsonDeps>;
+#[allow(clippy::disallowed_types)]
+type PackageJsonDepsRcCell = crate::sync::MaybeOnceLock<PackageJsonDepsRc>;
 
 pub trait PackageJsonCache {
   fn get(&self, path: &Path) -> Option<PackageJsonRc>;
   fn set(&self, path: PathBuf, package_json: PackageJsonRc);
 }
 
-#[derive(Debug, Error, Clone)]
-pub enum PackageJsonDepValueParseError {
+#[derive(Debug, Clone, JsError, PartialEq, Eq, Boxed)]
+pub struct PackageJsonDepValueParseError(
+  pub Box<PackageJsonDepValueParseErrorKind>,
+);
+
+#[derive(Debug, Error, Clone, JsError, PartialEq, Eq)]
+pub enum PackageJsonDepValueParseErrorKind {
+  #[class(inherit)]
   #[error(transparent)]
   VersionReq(#[from] NpmVersionReqParseError),
+  #[class(type)]
   #[error("Not implemented scheme '{scheme}'")]
   Unsupported { scheme: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PackageJsonDepValue {
-  Req(PackageReq),
-  Workspace(VersionReq),
+pub enum PackageJsonDepWorkspaceReq {
+  /// "workspace:~"
+  Tilde,
+
+  /// "workspace:^"
+  Caret,
+
+  /// "workspace:x.y.z", "workspace:*", "workspace:^x.y.z"
+  VersionReq(VersionReq),
 }
 
-pub type PackageJsonDeps =
-  IndexMap<String, Result<PackageJsonDepValue, PackageJsonDepValueParseError>>;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PackageJsonDepValue {
+  Req(PackageReq),
+  Workspace(PackageJsonDepWorkspaceReq),
+}
 
-#[derive(Debug, Error)]
+pub type PackageJsonDepsMap = IndexMap<
+  StackString,
+  Result<PackageJsonDepValue, PackageJsonDepValueParseError>,
+>;
+
+#[derive(Debug, Clone)]
+pub struct PackageJsonDeps {
+  pub dependencies: PackageJsonDepsMap,
+  pub dev_dependencies: PackageJsonDepsMap,
+}
+
+impl PackageJsonDeps {
+  /// Gets a package.json dependency entry by alias.
+  pub fn get(
+    &self,
+    alias: &str,
+  ) -> Option<&Result<PackageJsonDepValue, PackageJsonDepValueParseError>> {
+    self
+      .dependencies
+      .get(alias)
+      .or_else(|| self.dev_dependencies.get(alias))
+  }
+}
+
+#[derive(Debug, Error, JsError)]
 pub enum PackageJsonLoadError {
+  #[class(inherit)]
   #[error("Failed reading '{}'.", .path.display())]
   Io {
     path: PathBuf,
     #[source]
+    #[inherit]
     source: std::io::Error,
   },
+  #[class(inherit)]
   #[error("Malformed package.json '{}'.", .path.display())]
   Deserialize {
     path: PathBuf,
     #[source]
+    #[inherit]
     source: serde_json::Error,
   },
   #[error("\"exports\" cannot contains some keys starting with '.' and some not.\nThe exports object must either be an object of package subpath keys\nor an object of main entry condition name keys only.")]
@@ -88,21 +140,23 @@ pub struct PackageJson {
   pub dev_dependencies: Option<IndexMap<String, String>>,
   pub scripts: Option<IndexMap<String, String>>,
   pub workspaces: Option<Vec<String>>,
+  #[serde(skip_serializing)]
+  resolved_deps: PackageJsonDepsRcCell,
 }
 
 impl PackageJson {
   pub fn load_from_path(
-    path: &Path,
-    fs: &dyn crate::fs::DenoPkgJsonFs,
+    sys: &impl FsRead,
     maybe_cache: Option<&dyn PackageJsonCache>,
+    path: &Path,
   ) -> Result<PackageJsonRc, PackageJsonLoadError> {
     if let Some(item) = maybe_cache.and_then(|c| c.get(path)) {
       Ok(item)
     } else {
-      match fs.read_to_string_lossy(path) {
+      match sys.fs_read_to_string_lossy(path) {
         Ok(file_text) => {
           let pkg_json =
-            PackageJson::load_from_string(path.to_path_buf(), file_text)?;
+            PackageJson::load_from_string(path.to_path_buf(), &file_text)?;
           let pkg_json = crate::sync::new_rc(pkg_json);
           if let Some(cache) = maybe_cache {
             cache.set(path.to_path_buf(), pkg_json.clone());
@@ -119,7 +173,7 @@ impl PackageJson {
 
   pub fn load_from_string(
     path: PathBuf,
-    source: String,
+    source: &str,
   ) -> Result<PackageJson, PackageJsonLoadError> {
     if source.trim().is_empty() {
       return Ok(PackageJson {
@@ -137,10 +191,11 @@ impl PackageJson {
         dev_dependencies: None,
         scripts: None,
         workspaces: None,
+        resolved_deps: Default::default(),
       });
     }
 
-    let package_json: Value = serde_json::from_str(&source).map_err(|err| {
+    let package_json: Value = serde_json::from_str(source).map_err(|err| {
       PackageJsonLoadError::Deserialize {
         path: path.clone(),
         source: err,
@@ -282,6 +337,7 @@ impl PackageJson {
       dev_dependencies,
       scripts,
       workspaces,
+      resolved_deps: Default::default(),
     })
   }
 
@@ -303,7 +359,7 @@ impl PackageJson {
   }
 
   /// Resolve the package.json's dependencies.
-  pub fn resolve_local_package_json_deps(&self) -> PackageJsonDeps {
+  pub fn resolve_local_package_json_deps(&self) -> &PackageJsonDepsRc {
     /// Gets the name and raw version constraint for a registry info or
     /// package.json dependency entry taking into account npm package aliases.
     fn parse_dep_entry_name_and_raw_version<'a>(
@@ -331,52 +387,60 @@ impl PackageJson {
       value: &str,
     ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
       if let Some(workspace_key) = value.strip_prefix("workspace:") {
-        let version_req = VersionReq::parse_from_npm(workspace_key)?;
-        return Ok(PackageJsonDepValue::Workspace(version_req));
+        let workspace_req = match workspace_key {
+          "~" => PackageJsonDepWorkspaceReq::Tilde,
+          "^" => PackageJsonDepWorkspaceReq::Caret,
+          _ => PackageJsonDepWorkspaceReq::VersionReq(
+            VersionReq::parse_from_npm(workspace_key)?,
+          ),
+        };
+        return Ok(PackageJsonDepValue::Workspace(workspace_req));
       }
       if value.starts_with("file:")
         || value.starts_with("git:")
         || value.starts_with("http:")
         || value.starts_with("https:")
       {
-        return Err(PackageJsonDepValueParseError::Unsupported {
-          scheme: value.split(':').next().unwrap().to_string(),
-        });
+        return Err(
+          PackageJsonDepValueParseErrorKind::Unsupported {
+            scheme: value.split(':').next().unwrap().to_string(),
+          }
+          .into_box(),
+        );
       }
       let (name, version_req) =
         parse_dep_entry_name_and_raw_version(key, value);
       let result = VersionReq::parse_from_npm(version_req);
       match result {
         Ok(version_req) => Ok(PackageJsonDepValue::Req(PackageReq {
-          name: name.to_string(),
+          name: name.into(),
           version_req,
         })),
-        Err(err) => Err(PackageJsonDepValueParseError::VersionReq(err)),
-      }
-    }
-
-    fn insert_deps(
-      deps: Option<&IndexMap<String, String>>,
-      result: &mut PackageJsonDeps,
-    ) {
-      if let Some(deps) = deps {
-        for (key, value) in deps {
-          result
-            .entry(key.to_string())
-            .or_insert_with(|| parse_entry(key, value));
+        Err(err) => {
+          Err(PackageJsonDepValueParseErrorKind::VersionReq(err).into_box())
         }
       }
     }
 
-    let deps = self.dependencies.as_ref();
-    let dev_deps = self.dev_dependencies.as_ref();
-    let mut result = IndexMap::new();
+    fn get_map(deps: Option<&IndexMap<String, String>>) -> PackageJsonDepsMap {
+      let Some(deps) = deps else {
+        return Default::default();
+      };
+      let mut result = IndexMap::with_capacity(deps.len());
+      for (key, value) in deps {
+        result
+          .entry(StackString::from(key.as_str()))
+          .or_insert_with(|| parse_entry(key, value));
+      }
+      result
+    }
 
-    // favors the deps over dev_deps
-    insert_deps(deps, &mut result);
-    insert_deps(dev_deps, &mut result);
-
-    result
+    self.resolved_deps.get_or_init(|| {
+      PackageJsonDepsRc::new(PackageJsonDeps {
+        dependencies: get_map(self.dependencies.as_ref()),
+        dev_dependencies: get_map(self.dev_dependencies.as_ref()),
+      })
+    })
   }
 }
 
@@ -411,13 +475,14 @@ fn is_conditional_exports_main_sugar(
 mod test {
   use super::*;
   use pretty_assertions::assert_eq;
+  use std::error::Error;
   use std::path::PathBuf;
 
   #[test]
   fn null_exports_should_not_crash() {
     let package_json = PackageJson::load_from_string(
       PathBuf::from("/package.json"),
-      r#"{ "exports": null }"#.to_string(),
+      r#"{ "exports": null }"#,
     )
     .unwrap();
 
@@ -426,16 +491,22 @@ mod test {
 
   fn get_local_package_json_version_reqs_for_tests(
     package_json: &PackageJson,
-  ) -> IndexMap<String, Result<PackageJsonDepValue, String>> {
-    package_json
-      .resolve_local_package_json_deps()
+  ) -> IndexMap<
+    String,
+    Result<PackageJsonDepValue, PackageJsonDepValueParseErrorKind>,
+  > {
+    let deps = package_json.resolve_local_package_json_deps();
+    deps
+      .dependencies
+      .clone()
       .into_iter()
+      .chain(deps.dev_dependencies.clone())
       .map(|(k, v)| {
         (
-          k,
+          k.to_string(),
           match v {
             Ok(v) => Ok(v),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(err.into_kind()),
           },
         )
       })
@@ -444,81 +515,84 @@ mod test {
 
   #[test]
   fn test_get_local_package_json_version_reqs() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "^1.2".to_string()),
       ("other".to_string(), "npm:package@~1.3".to_string()),
     ]));
     package_json.dev_dependencies = Some(IndexMap::from([
       ("package_b".to_string(), "~2.2".to_string()),
-      // should be ignored
       ("other".to_string(), "^3.2".to_string()),
     ]));
-    let deps = get_local_package_json_version_reqs_for_tests(&package_json);
+    let deps = package_json.resolve_local_package_json_deps();
     assert_eq!(
-      deps,
-      IndexMap::from([
+      deps
+        .dependencies
+        .clone()
+        .into_iter()
+        .map(|d| (d.0, d.1.unwrap()))
+        .collect::<Vec<_>>(),
+      Vec::from([
         (
-          "test".to_string(),
-          Ok(PackageJsonDepValue::Req(
-            PackageReq::from_str("test@^1.2").unwrap()
-          ))
+          "test".into(),
+          PackageJsonDepValue::Req(PackageReq::from_str("test@^1.2").unwrap())
         ),
         (
-          "other".to_string(),
-          Ok(PackageJsonDepValue::Req(
+          "other".into(),
+          PackageJsonDepValue::Req(
             PackageReq::from_str("package@~1.3").unwrap()
-          ))
+          )
+        ),
+      ])
+    );
+    assert_eq!(
+      deps
+        .dev_dependencies
+        .clone()
+        .into_iter()
+        .map(|d| (d.0, d.1.unwrap()))
+        .collect::<Vec<_>>(),
+      Vec::from([
+        (
+          "package_b".into(),
+          PackageJsonDepValue::Req(
+            PackageReq::from_str("package_b@~2.2").unwrap()
+          )
         ),
         (
-          "package_b".to_string(),
-          Ok(PackageJsonDepValue::Req(
-            PackageReq::from_str("package_b@~2.2").unwrap()
-          ))
-        )
+          "other".into(),
+          PackageJsonDepValue::Req(PackageReq::from_str("other@^3.2").unwrap())
+        ),
       ])
     );
   }
 
   #[test]
   fn test_get_local_package_json_version_reqs_errors_non_npm_specifier() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([(
       "test".to_string(),
       "%*(#$%()".to_string(),
     )]));
     let map = get_local_package_json_version_reqs_for_tests(&package_json);
+    assert_eq!(map.len(), 1);
+    let err = map.get("test").unwrap().as_ref().unwrap_err();
+    assert_eq!(format!("{}", err), "Invalid version requirement");
     assert_eq!(
-      map,
-      IndexMap::from([(
-        "test".to_string(),
-        Err(
-          concat!(
-            "Invalid npm version requirement. Unexpected character.\n",
-            "  %*(#$%()\n",
-            "  ~"
-          )
-          .to_string()
-        )
-      )])
+      format!("{}", err.source().unwrap()),
+      concat!("Unexpected character.\n", "  %*(#$%()\n", "  ~")
     );
   }
 
   #[test]
   fn test_get_local_package_json_version_reqs_range() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([(
       "test".to_string(),
       "1.x - 1.3".to_string(),
@@ -529,7 +603,7 @@ mod test {
       IndexMap::from([(
         "test".to_string(),
         Ok(PackageJsonDepValue::Req(PackageReq {
-          name: "test".to_string(),
+          name: "test".into(),
           version_req: VersionReq::parse_from_npm("1.x - 1.3").unwrap()
         }))
       )])
@@ -538,14 +612,18 @@ mod test {
 
   #[test]
   fn test_get_local_package_json_version_reqs_skips_certain_specifiers() {
-    let mut package_json = PackageJson::load_from_string(
-      PathBuf::from("/package.json"),
-      "{}".to_string(),
-    )
-    .unwrap();
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
     package_json.dependencies = Some(IndexMap::from([
       ("test".to_string(), "1".to_string()),
-      ("work-test".to_string(), "workspace:1.1.1".to_string()),
+      (
+        "work-test-version-req".to_string(),
+        "workspace:1.1.1".to_string(),
+      ),
+      ("work-test-star".to_string(), "workspace:*".to_string()),
+      ("work-test-tilde".to_string(), "workspace:~".to_string()),
+      ("work-test-caret".to_string(), "workspace:^".to_string()),
       ("file-test".to_string(), "file:something".to_string()),
       ("git-test".to_string(), "git:something".to_string()),
       ("http-test".to_string(), "http://something".to_string()),
@@ -556,33 +634,63 @@ mod test {
       result,
       IndexMap::from([
         (
-          "file-test".to_string(),
-          Err("Not implemented scheme 'file'".to_string()),
-        ),
-        (
-          "git-test".to_string(),
-          Err("Not implemented scheme 'git'".to_string()),
-        ),
-        (
-          "http-test".to_string(),
-          Err("Not implemented scheme 'http'".to_string()),
-        ),
-        (
-          "https-test".to_string(),
-          Err("Not implemented scheme 'https'".to_string()),
-        ),
-        (
           "test".to_string(),
           Ok(PackageJsonDepValue::Req(
             PackageReq::from_str("test@1").unwrap()
           ))
         ),
         (
-          "work-test".to_string(),
+          "work-test-star".to_string(),
           Ok(PackageJsonDepValue::Workspace(
-            VersionReq::parse_from_npm("1.1.1").unwrap()
+            PackageJsonDepWorkspaceReq::VersionReq(
+              VersionReq::parse_from_npm("*").unwrap()
+            )
           ))
-        )
+        ),
+        (
+          "work-test-version-req".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::VersionReq(
+              VersionReq::parse_from_npm("1.1.1").unwrap()
+            )
+          ))
+        ),
+        (
+          "work-test-tilde".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::Tilde
+          ))
+        ),
+        (
+          "work-test-caret".to_string(),
+          Ok(PackageJsonDepValue::Workspace(
+            PackageJsonDepWorkspaceReq::Caret
+          ))
+        ),
+        (
+          "file-test".to_string(),
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
+            scheme: "file".to_string()
+          }),
+        ),
+        (
+          "git-test".to_string(),
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
+            scheme: "git".to_string()
+          }),
+        ),
+        (
+          "http-test".to_string(),
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
+            scheme: "http".to_string()
+          }),
+        ),
+        (
+          "https-test".to_string(),
+          Err(PackageJsonDepValueParseErrorKind::Unsupported {
+            scheme: "https".to_string()
+          }),
+        ),
       ])
     );
   }
