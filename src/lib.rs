@@ -65,6 +65,7 @@ pub enum PackageJsonDepWorkspaceReq {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PackageJsonDepValue {
+  File(String),
   Req(PackageReq),
   Workspace(PackageJsonDepWorkspaceReq),
 }
@@ -397,8 +398,7 @@ impl PackageJson {
         };
         return Ok(PackageJsonDepValue::Workspace(workspace_req));
       }
-      if value.starts_with("file:")
-        || value.starts_with("git:")
+      if value.starts_with("git:")
         || value.starts_with("http:")
         || value.starts_with("https:")
       {
@@ -408,6 +408,9 @@ impl PackageJson {
           }
           .into_box(),
         );
+      }
+      if let Some(path) = value.strip_prefix("file:") {
+        return Ok(PackageJsonDepValue::File(path.to_string()));
       }
       let (name, version_req) =
         parse_dep_entry_name_and_raw_version(key, value);
@@ -670,9 +673,7 @@ mod test {
         ),
         (
           "file-test".to_string(),
-          Err(PackageJsonDepValueParseErrorKind::Unsupported {
-            scheme: "file".to_string()
-          }),
+          Ok(PackageJsonDepValue::File("something".to_string())),
         ),
         (
           "git-test".to_string(),
