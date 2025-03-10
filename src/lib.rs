@@ -324,9 +324,7 @@ impl PackageJson {
       .and_then(map_string);
     let types_versions = package_json
       .remove("typesVersions")
-      .and_then(|exports| {
-        exports.as_object().map(|o| o.to_owned())
-      });
+      .and_then(|exports| exports.as_object().map(|o| o.to_owned()));
     let workspaces = package_json
       .remove("workspaces")
       .and_then(parse_string_array);
