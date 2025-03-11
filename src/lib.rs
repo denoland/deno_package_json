@@ -138,6 +138,7 @@ pub struct PackageJson {
   #[serde(rename = "type")]
   pub typ: String,
   pub types: Option<String>,
+  pub types_versions: Option<Map<String, Value>>,
   pub dependencies: Option<IndexMap<String, String>>,
   pub dev_dependencies: Option<IndexMap<String, String>>,
   pub scripts: Option<IndexMap<String, String>>,
@@ -186,6 +187,7 @@ impl PackageJson {
         module: None,
         typ: "none".to_string(),
         types: None,
+        types_versions: None,
         exports: None,
         imports: None,
         bin: None,
@@ -320,6 +322,9 @@ impl PackageJson {
       .remove("typings")
       .or_else(|| package_json.remove("types"))
       .and_then(map_string);
+    let types_versions = package_json
+      .remove("typesVersions")
+      .and_then(|exports| exports.as_object().map(|o| o.to_owned()));
     let workspaces = package_json
       .remove("workspaces")
       .and_then(parse_string_array);
@@ -332,6 +337,7 @@ impl PackageJson {
       module,
       typ,
       types,
+      types_versions,
       exports,
       imports,
       bin,
@@ -707,6 +713,9 @@ mod test {
       },
       "bin": "./main.js",
       "types": "./types.d.ts",
+      "typesVersions": {
+        "<4.0": { "index.d.ts": ["index.v3.d.ts"] }
+      },
       "imports": {
         "#test": "./main.js",
       },
