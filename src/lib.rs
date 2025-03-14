@@ -141,8 +141,13 @@ pub struct PackageJson {
   pub types_versions: Option<Map<String, Value>>,
   pub dependencies: Option<IndexMap<String, String>>,
   pub dev_dependencies: Option<IndexMap<String, String>>,
+  pub peer_dependencies: Option<IndexMap<String, String>>,
+  pub peer_dependencies_meta: Option<Value>,
+  pub optional_dependencies: Option<IndexMap<String, String>>,
   pub scripts: Option<IndexMap<String, String>>,
   pub workspaces: Option<Vec<String>>,
+  pub os: Option<Vec<String>>,
+  pub cpu: Option<Vec<String>>,
   #[serde(skip_serializing)]
   resolved_deps: PackageJsonDepsRcCell,
 }
@@ -193,8 +198,13 @@ impl PackageJson {
         bin: None,
         dependencies: None,
         dev_dependencies: None,
+        peer_dependencies: None,
+        peer_dependencies_meta: None,
+        optional_dependencies: None,
         scripts: None,
         workspaces: None,
+        os: None,
+        cpu: None,
         resolved_deps: Default::default(),
       });
     }
@@ -298,6 +308,13 @@ impl PackageJson {
     let dev_dependencies = package_json
       .remove("devDependencies")
       .and_then(parse_string_map);
+    let peer_dependencies = package_json
+      .remove("peerDependencies")
+      .and_then(parse_string_map);
+    let peer_dependencies_meta = package_json.remove("peerDependenciesMeta");
+    let optional_dependencies = package_json
+      .remove("optionalDependencies")
+      .and_then(parse_string_map);
 
     let scripts: Option<IndexMap<String, String>> =
       package_json.remove("scripts").and_then(parse_string_map);
@@ -328,6 +345,8 @@ impl PackageJson {
     let workspaces = package_json
       .remove("workspaces")
       .and_then(parse_string_array);
+    let os = package_json.remove("os").and_then(parse_string_array);
+    let cpu = package_json.remove("cpu").and_then(parse_string_array);
 
     Ok(PackageJson {
       path,
@@ -343,8 +362,13 @@ impl PackageJson {
       bin,
       dependencies,
       dev_dependencies,
+      peer_dependencies,
+      peer_dependencies_meta,
+      optional_dependencies,
       scripts,
       workspaces,
+      os,
+      cpu,
       resolved_deps: Default::default(),
     })
   }
@@ -731,7 +755,20 @@ mod test {
       "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1",
       },
-      "workspaces": ["asdf", "asdf2"]
+      "workspaces": ["asdf", "asdf2"],
+      "cpu": ["x86_64"],
+      "os": ["win32"],
+      "optionalDependencies": {
+        "optional": "1.1"
+      },
+      "peerDependencies": {
+        "peer": "1.0"
+      },
+      "peerDependenciesMeta": {
+        "peer": {
+          "optional": true
+        }
+      },
     });
     let package_json = PackageJson::load_from_value(
       PathBuf::from("/package.json"),
