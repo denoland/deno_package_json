@@ -70,6 +70,71 @@ pub enum PackageJsonDepValue {
   Workspace(PackageJsonDepWorkspaceReq),
 }
 
+impl PackageJsonDepValue {
+  pub fn parse(
+    key: &str,
+    value: &str,
+  ) -> Result<Self, PackageJsonDepValueParseError> {
+    /// Gets the name and raw version constraint for a registry info or
+    /// package.json dependency entry taking into account npm package aliases.
+    fn parse_dep_entry_name_and_raw_version<'a>(
+      key: &'a str,
+      value: &'a str,
+    ) -> (&'a str, &'a str) {
+      if let Some(package_and_version) = value.strip_prefix("npm:") {
+        if let Some((name, version)) = package_and_version.rsplit_once('@') {
+          // if empty, then the name was scoped and there's no version
+          if name.is_empty() {
+            (package_and_version, "*")
+          } else {
+            (name, version)
+          }
+        } else {
+          (package_and_version, "*")
+        }
+      } else {
+        (key, value)
+      }
+    }
+
+    if let Some(workspace_key) = value.strip_prefix("workspace:") {
+      let workspace_req = match workspace_key {
+        "~" => PackageJsonDepWorkspaceReq::Tilde,
+        "^" => PackageJsonDepWorkspaceReq::Caret,
+        _ => PackageJsonDepWorkspaceReq::VersionReq(
+          VersionReq::parse_from_npm(workspace_key)?,
+        ),
+      };
+      return Ok(Self::Workspace(workspace_req));
+    }
+    if value.starts_with("git:")
+      || value.starts_with("http:")
+      || value.starts_with("https:")
+    {
+      return Err(
+        PackageJsonDepValueParseErrorKind::Unsupported {
+          scheme: value.split(':').next().unwrap().to_string(),
+        }
+        .into_box(),
+      );
+    }
+    if let Some(path) = value.strip_prefix("file:") {
+      return Ok(Self::File(path.to_string()));
+    }
+    let (name, version_req) = parse_dep_entry_name_and_raw_version(key, value);
+    let result = VersionReq::parse_from_npm(version_req);
+    match result {
+      Ok(version_req) => Ok(Self::Req(PackageReq {
+        name: name.into(),
+        version_req,
+      })),
+      Err(err) => {
+        Err(PackageJsonDepValueParseErrorKind::VersionReq(err).into_box())
+      }
+    }
+  }
+}
+
 pub type PackageJsonDepsMap = IndexMap<
   StackString,
   Result<PackageJsonDepValue, PackageJsonDepValueParseError>,
@@ -141,8 +206,13 @@ pub struct PackageJson {
   pub types_versions: Option<Map<String, Value>>,
   pub dependencies: Option<IndexMap<String, String>>,
   pub dev_dependencies: Option<IndexMap<String, String>>,
+  pub peer_dependencies: Option<IndexMap<String, String>>,
+  pub peer_dependencies_meta: Option<Value>,
+  pub optional_dependencies: Option<IndexMap<String, String>>,
   pub scripts: Option<IndexMap<String, String>>,
   pub workspaces: Option<Vec<String>>,
+  pub os: Option<Vec<String>>,
+  pub cpu: Option<Vec<String>>,
   #[serde(skip_serializing)]
   resolved_deps: PackageJsonDepsRcCell,
 }
@@ -193,8 +263,13 @@ impl PackageJson {
         bin: None,
         dependencies: None,
         dev_dependencies: None,
+        peer_dependencies: None,
+        peer_dependencies_meta: None,
+        optional_dependencies: None,
         scripts: None,
         workspaces: None,
+        os: None,
+        cpu: None,
         resolved_deps: Default::default(),
       });
     }
@@ -298,6 +373,13 @@ impl PackageJson {
     let dev_dependencies = package_json
       .remove("devDependencies")
       .and_then(parse_string_map);
+    let peer_dependencies = package_json
+      .remove("peerDependencies")
+      .and_then(parse_string_map);
+    let peer_dependencies_meta = package_json.remove("peerDependenciesMeta");
+    let optional_dependencies = package_json
+      .remove("optionalDependencies")
+      .and_then(parse_string_map);
 
     let scripts: Option<IndexMap<String, String>> =
       package_json.remove("scripts").and_then(parse_string_map);
@@ -328,6 +410,8 @@ impl PackageJson {
     let workspaces = package_json
       .remove("workspaces")
       .and_then(parse_string_array);
+    let os = package_json.remove("os").and_then(parse_string_array);
+    let cpu = package_json.remove("cpu").and_then(parse_string_array);
 
     Ok(PackageJson {
       path,
@@ -343,8 +427,13 @@ impl PackageJson {
       bin,
       dependencies,
       dev_dependencies,
+      peer_dependencies,
+      peer_dependencies_meta,
+      optional_dependencies,
       scripts,
       workspaces,
+      os,
+      cpu,
       resolved_deps: Default::default(),
     })
   }
@@ -368,70 +457,6 @@ impl PackageJson {
 
   /// Resolve the package.json's dependencies.
   pub fn resolve_local_package_json_deps(&self) -> &PackageJsonDepsRc {
-    /// Gets the name and raw version constraint for a registry info or
-    /// package.json dependency entry taking into account npm package aliases.
-    fn parse_dep_entry_name_and_raw_version<'a>(
-      key: &'a str,
-      value: &'a str,
-    ) -> (&'a str, &'a str) {
-      if let Some(package_and_version) = value.strip_prefix("npm:") {
-        if let Some((name, version)) = package_and_version.rsplit_once('@') {
-          // if empty, then the name was scoped and there's no version
-          if name.is_empty() {
-            (package_and_version, "*")
-          } else {
-            (name, version)
-          }
-        } else {
-          (package_and_version, "*")
-        }
-      } else {
-        (key, value)
-      }
-    }
-
-    fn parse_entry(
-      key: &str,
-      value: &str,
-    ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
-      if let Some(workspace_key) = value.strip_prefix("workspace:") {
-        let workspace_req = match workspace_key {
-          "~" => PackageJsonDepWorkspaceReq::Tilde,
-          "^" => PackageJsonDepWorkspaceReq::Caret,
-          _ => PackageJsonDepWorkspaceReq::VersionReq(
-            VersionReq::parse_from_npm(workspace_key)?,
-          ),
-        };
-        return Ok(PackageJsonDepValue::Workspace(workspace_req));
-      }
-      if value.starts_with("git:")
-        || value.starts_with("http:")
-        || value.starts_with("https:")
-      {
-        return Err(
-          PackageJsonDepValueParseErrorKind::Unsupported {
-            scheme: value.split(':').next().unwrap().to_string(),
-          }
-          .into_box(),
-        );
-      }
-      if let Some(path) = value.strip_prefix("file:") {
-        return Ok(PackageJsonDepValue::File(path.to_string()));
-      }
-      let (name, version_req) =
-        parse_dep_entry_name_and_raw_version(key, value);
-      let result = VersionReq::parse_from_npm(version_req);
-      match result {
-        Ok(version_req) => Ok(PackageJsonDepValue::Req(PackageReq {
-          name: name.into(),
-          version_req,
-        })),
-        Err(err) => {
-          Err(PackageJsonDepValueParseErrorKind::VersionReq(err).into_box())
-        }
-      }
-    }
-
     fn get_map(deps: Option<&IndexMap<String, String>>) -> PackageJsonDepsMap {
       let Some(deps) = deps else {
         return Default::default();
@@ -440,7 +465,7 @@ impl PackageJson {
       for (key, value) in deps {
         result
           .entry(StackString::from(key.as_str()))
-          .or_insert_with(|| parse_entry(key, value));
+          .or_insert_with(|| PackageJsonDepValue::parse(key, value));
       }
       result
     }
@@ -731,7 +756,20 @@ mod test {
       "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1",
       },
-      "workspaces": ["asdf", "asdf2"]
+      "workspaces": ["asdf", "asdf2"],
+      "cpu": ["x86_64"],
+      "os": ["win32"],
+      "optionalDependencies": {
+        "optional": "1.1"
+      },
+      "peerDependencies": {
+        "peer": "1.0"
+      },
+      "peerDependenciesMeta": {
+        "peer": {
+          "optional": true
+        }
+      },
     });
     let package_json = PackageJson::load_from_value(
       PathBuf::from("/package.json"),
