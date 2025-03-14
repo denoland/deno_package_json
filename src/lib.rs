@@ -70,6 +70,71 @@ pub enum PackageJsonDepValue {
   Workspace(PackageJsonDepWorkspaceReq),
 }
 
+impl PackageJsonDepValue {
+  pub fn parse(
+    key: &str,
+    value: &str,
+  ) -> Result<Self, PackageJsonDepValueParseError> {
+    /// Gets the name and raw version constraint for a registry info or
+    /// package.json dependency entry taking into account npm package aliases.
+    fn parse_dep_entry_name_and_raw_version<'a>(
+      key: &'a str,
+      value: &'a str,
+    ) -> (&'a str, &'a str) {
+      if let Some(package_and_version) = value.strip_prefix("npm:") {
+        if let Some((name, version)) = package_and_version.rsplit_once('@') {
+          // if empty, then the name was scoped and there's no version
+          if name.is_empty() {
+            (package_and_version, "*")
+          } else {
+            (name, version)
+          }
+        } else {
+          (package_and_version, "*")
+        }
+      } else {
+        (key, value)
+      }
+    }
+
+    if let Some(workspace_key) = value.strip_prefix("workspace:") {
+      let workspace_req = match workspace_key {
+        "~" => PackageJsonDepWorkspaceReq::Tilde,
+        "^" => PackageJsonDepWorkspaceReq::Caret,
+        _ => PackageJsonDepWorkspaceReq::VersionReq(
+          VersionReq::parse_from_npm(workspace_key)?,
+        ),
+      };
+      return Ok(Self::Workspace(workspace_req));
+    }
+    if value.starts_with("git:")
+      || value.starts_with("http:")
+      || value.starts_with("https:")
+    {
+      return Err(
+        PackageJsonDepValueParseErrorKind::Unsupported {
+          scheme: value.split(':').next().unwrap().to_string(),
+        }
+        .into_box(),
+      );
+    }
+    if let Some(path) = value.strip_prefix("file:") {
+      return Ok(Self::File(path.to_string()));
+    }
+    let (name, version_req) = parse_dep_entry_name_and_raw_version(key, value);
+    let result = VersionReq::parse_from_npm(version_req);
+    match result {
+      Ok(version_req) => Ok(Self::Req(PackageReq {
+        name: name.into(),
+        version_req,
+      })),
+      Err(err) => {
+        Err(PackageJsonDepValueParseErrorKind::VersionReq(err).into_box())
+      }
+    }
+  }
+}
+
 pub type PackageJsonDepsMap = IndexMap<
   StackString,
   Result<PackageJsonDepValue, PackageJsonDepValueParseError>,
@@ -392,70 +457,6 @@ impl PackageJson {
 
   /// Resolve the package.json's dependencies.
   pub fn resolve_local_package_json_deps(&self) -> &PackageJsonDepsRc {
-    /// Gets the name and raw version constraint for a registry info or
-    /// package.json dependency entry taking into account npm package aliases.
-    fn parse_dep_entry_name_and_raw_version<'a>(
-      key: &'a str,
-      value: &'a str,
-    ) -> (&'a str, &'a str) {
-      if let Some(package_and_version) = value.strip_prefix("npm:") {
-        if let Some((name, version)) = package_and_version.rsplit_once('@') {
-          // if empty, then the name was scoped and there's no version
-          if name.is_empty() {
-            (package_and_version, "*")
-          } else {
-            (name, version)
-          }
-        } else {
-          (package_and_version, "*")
-        }
-      } else {
-        (key, value)
-      }
-    }
-
-    fn parse_entry(
-      key: &str,
-      value: &str,
-    ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
-      if let Some(workspace_key) = value.strip_prefix("workspace:") {
-        let workspace_req = match workspace_key {
-          "~" => PackageJsonDepWorkspaceReq::Tilde,
-          "^" => PackageJsonDepWorkspaceReq::Caret,
-          _ => PackageJsonDepWorkspaceReq::VersionReq(
-            VersionReq::parse_from_npm(workspace_key)?,
-          ),
-        };
-        return Ok(PackageJsonDepValue::Workspace(workspace_req));
-      }
-      if value.starts_with("git:")
-        || value.starts_with("http:")
-        || value.starts_with("https:")
-      {
-        return Err(
-          PackageJsonDepValueParseErrorKind::Unsupported {
-            scheme: value.split(':').next().unwrap().to_string(),
-          }
-          .into_box(),
-        );
-      }
-      if let Some(path) = value.strip_prefix("file:") {
-        return Ok(PackageJsonDepValue::File(path.to_string()));
-      }
-      let (name, version_req) =
-        parse_dep_entry_name_and_raw_version(key, value);
-      let result = VersionReq::parse_from_npm(version_req);
-      match result {
-        Ok(version_req) => Ok(PackageJsonDepValue::Req(PackageReq {
-          name: name.into(),
-          version_req,
-        })),
-        Err(err) => {
-          Err(PackageJsonDepValueParseErrorKind::VersionReq(err).into_box())
-        }
-      }
-    }
-
     fn get_map(deps: Option<&IndexMap<String, String>>) -> PackageJsonDepsMap {
       let Some(deps) = deps else {
         return Default::default();
@@ -464,7 +465,7 @@ impl PackageJson {
       for (key, value) in deps {
         result
           .entry(StackString::from(key.as_str()))
-          .or_insert_with(|| parse_entry(key, value));
+          .or_insert_with(|| PackageJsonDepValue::parse(key, value));
       }
       result
     }
