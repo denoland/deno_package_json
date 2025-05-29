@@ -14,6 +14,7 @@ use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
 use deno_semver::StackString;
 use deno_semver::VersionReq;
+use deno_semver::VersionReqSpecifierParseError;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Map;
@@ -46,6 +47,9 @@ pub enum PackageJsonDepValueParseErrorKind {
   #[class(inherit)]
   #[error(transparent)]
   VersionReq(#[from] NpmVersionReqParseError),
+  #[class(inherit)]
+  #[error(transparent)]
+  JsrVersionReq(#[from] VersionReqSpecifierParseError),
   #[class(type)]
   #[error("Not implemented scheme '{scheme}'")]
   Unsupported { scheme: String },
@@ -68,6 +72,7 @@ pub enum PackageJsonDepValue {
   File(String),
   Req(PackageReq),
   Workspace(PackageJsonDepWorkspaceReq),
+  JsrReq(PackageReq),
 }
 
 impl PackageJsonDepValue {
@@ -106,6 +111,23 @@ impl PackageJsonDepValue {
         ),
       };
       return Ok(Self::Workspace(workspace_req));
+    } else if let Some(raw_jsr_req) = value.strip_prefix("jsr:") {
+      let (name, version_req) =
+        parse_dep_entry_name_and_raw_version(key, raw_jsr_req);
+      let result = VersionReq::parse_from_specifier(version_req);
+      match result {
+        Ok(version_req) => {
+          return Ok(Self::JsrReq(PackageReq {
+            name: name.into(),
+            version_req,
+          }))
+        }
+        Err(err) => {
+          return Err(
+            PackageJsonDepValueParseErrorKind::JsrVersionReq(err).into_box(),
+          )
+        }
+      }
     }
     if value.starts_with("git:")
       || value.starts_with("http:")
@@ -640,6 +662,28 @@ mod test {
         Ok(PackageJsonDepValue::Req(PackageReq {
           name: "test".into(),
           version_req: VersionReq::parse_from_npm("1.x - 1.3").unwrap()
+        }))
+      )])
+    );
+  }
+
+  #[test]
+  fn test_get_local_package_json_version_reqs_jsr() {
+    let mut package_json =
+      PackageJson::load_from_string(PathBuf::from("/package.json"), "{}")
+        .unwrap();
+    package_json.dependencies = Some(IndexMap::from([(
+      "@denotest/foo".to_string(),
+      "jsr:^1.2".to_string(),
+    )]));
+    let map = get_local_package_json_version_reqs_for_tests(&package_json);
+    assert_eq!(
+      map,
+      IndexMap::from([(
+        "@denotest/foo".to_string(),
+        Ok(PackageJsonDepValue::JsrReq(PackageReq {
+          name: "@denotest/foo".into(),
+          version_req: VersionReq::parse_from_specifier("^1.2").unwrap()
         }))
       )])
     );
