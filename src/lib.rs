@@ -204,21 +204,15 @@ pub enum PackageJsonLoadError {
   InvalidExports,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NodeModuleKind {
-  Esm,
-  Cjs,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageJson {
   pub exports: Option<Map<String, Value>>,
   pub imports: Option<Map<String, Value>>,
   pub bin: Option<Value>,
-  main: Option<String>,   // use .main(...)
-  module: Option<String>, // use .main(...)
-  browser: Option<String>,
+  pub main: Option<String>,
+  pub module: Option<String>,
+  pub browser: Option<String>,
   pub name: Option<String>,
   pub version: Option<String>,
   #[serde(skip)]
@@ -471,27 +465,6 @@ impl PackageJson {
 
   pub fn dir_path(&self) -> &Path {
     self.path.parent().unwrap()
-  }
-
-  pub fn main_browser(&self, referrer_kind: NodeModuleKind) -> Option<&str> {
-    if self.browser.is_some() {
-      return self
-        .browser
-        .as_ref()
-        .map(|m| m.trim())
-        .filter(|m| !m.is_empty());
-    }
-
-    self.main(referrer_kind)
-  }
-
-  pub fn main(&self, referrer_kind: NodeModuleKind) -> Option<&str> {
-    let main = if referrer_kind == NodeModuleKind::Esm && self.typ == "module" {
-      self.module.as_ref().or(self.main.as_ref())
-    } else {
-      self.main.as_ref()
-    };
-    main.map(|m| m.trim()).filter(|m| !m.is_empty())
   }
 
   /// Resolve the package.json's dependencies.
