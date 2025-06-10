@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "deno_package_json"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "boxed_error",
  "deno_error",
