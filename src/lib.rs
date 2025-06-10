@@ -204,20 +204,15 @@ pub enum PackageJsonLoadError {
   InvalidExports,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NodeModuleKind {
-  Esm,
-  Cjs,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageJson {
   pub exports: Option<Map<String, Value>>,
   pub imports: Option<Map<String, Value>>,
   pub bin: Option<Value>,
-  main: Option<String>,   // use .main(...)
-  module: Option<String>, // use .main(...)
+  pub main: Option<String>,
+  pub module: Option<String>,
+  pub browser: Option<String>,
   pub name: Option<String>,
   pub version: Option<String>,
   #[serde(skip)]
@@ -277,6 +272,7 @@ impl PackageJson {
         name: None,
         version: None,
         module: None,
+        browser: None,
         typ: "none".to_string(),
         types: None,
         types_versions: None,
@@ -365,6 +361,7 @@ impl PackageJson {
     let imports_val = package_json.remove("imports");
     let main_val = package_json.remove("main");
     let module_val = package_json.remove("module");
+    let browser_val = package_json.remove("browser");
     let name_val = package_json.remove("name");
     let version_val = package_json.remove("version");
     let type_val = package_json.remove("type");
@@ -388,6 +385,7 @@ impl PackageJson {
     let name = name_val.and_then(map_string);
     let version = version_val.and_then(map_string);
     let module = module_val.and_then(map_string);
+    let browser = browser_val.and_then(map_string);
 
     let dependencies = package_json
       .remove("dependencies")
@@ -441,6 +439,7 @@ impl PackageJson {
       name,
       version,
       module,
+      browser,
       typ,
       types,
       types_versions,
@@ -466,15 +465,6 @@ impl PackageJson {
 
   pub fn dir_path(&self) -> &Path {
     self.path.parent().unwrap()
-  }
-
-  pub fn main(&self, referrer_kind: NodeModuleKind) -> Option<&str> {
-    let main = if referrer_kind == NodeModuleKind::Esm && self.typ == "module" {
-      self.module.as_ref().or(self.main.as_ref())
-    } else {
-      self.main.as_ref()
-    };
-    main.map(|m| m.trim()).filter(|m| !m.is_empty())
   }
 
   /// Resolve the package.json's dependencies.
@@ -790,6 +780,7 @@ mod test {
       },
       "main": "./main.js",
       "module": "./module.js",
+      "browser": "./browser.js",
       "type": "module",
       "dependencies": {
         "name": "1.2",
