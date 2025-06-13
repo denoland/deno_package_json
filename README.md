@@ -1,5 +1,7 @@
 # `deno_package_json`
 
+**ARCHIVED:** This repo was moved into https://github.com/denoland/deno
+
 The package.json implementation used in the Deno CLI.
 
 ## Versioning Strategy
